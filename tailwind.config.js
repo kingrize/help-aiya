@@ -9,16 +9,18 @@ export default {
       },
       colors: {
         cozy: {
-          bg: "#FFF8F3", // Cream hangat
-          card: "#FFFFFF",
-          text: "#5D5D5D",
-          primary: "#E68E8E", // Dusty Pink
-          secondary: "#9FB8AD", // Sage Green
-          accent: "#EAC286", // Soft Gold
+          bg: "var(--c-bg)",
+          card: "var(--c-card)",
+          text: "var(--c-text)",
+          muted: "var(--c-text-muted)", // Tambahan baru
+          primary: "var(--c-primary)",
+          secondary: "var(--c-secondary)",
+          accent: "var(--c-accent)",
+          border: "var(--c-border)",
         },
       },
       boxShadow: {
-        soft: "0 10px 40px -10px rgba(230, 142, 142, 0.15)",
+        soft: "0 4px 20px -2px rgba(0, 0, 0, 0.1)",
       },
     },
   },

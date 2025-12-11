@@ -1,11 +1,13 @@
 <script setup>
 import { ref, computed } from "vue";
-import { questions } from "../data/questions";
+import { questions } from "../data/questions.js";
 import HeaderSection from "../components/HeaderSection.vue";
 import FooterSection from "../components/FooterSection.vue";
 import QuestionCard from "../components/QuestionCard.vue";
 
+// Logic Kartu & Progress
 const revealedCards = ref(new Set());
+
 const toggleCard = (id) => {
     if (revealedCards.value.has(id)) {
         revealedCards.value.delete(id);
@@ -14,6 +16,7 @@ const toggleCard = (id) => {
     }
 };
 
+// Logic Filter
 const selectedTag = ref("Semua");
 const tags = computed(() => ["Semua", ...new Set(questions.map((q) => q.tag))]);
 
@@ -21,13 +24,41 @@ const filteredQuestions = computed(() => {
     if (selectedTag.value === "Semua") return questions;
     return questions.filter((q) => q.tag === selectedTag.value);
 });
+
+// Hitung Progress
+const progressPercentage = computed(() => {
+    if (filteredQuestions.value.length === 0) return 0;
+    // Hitung kartu yg terbuka DAN ada di list saat ini
+    const openCount = filteredQuestions.value.filter((q) =>
+        revealedCards.value.has(q.id),
+    ).length;
+    return Math.round((openCount / filteredQuestions.value.length) * 100);
+});
 </script>
 
 <template>
-    <div class="min-h-screen">
+    <div class="min-h-screen pb-24">
         <HeaderSection />
 
         <main class="max-w-3xl mx-auto px-4 md:px-6">
+            <div
+                class="sticky top-4 z-30 mb-8 bg-white/90 backdrop-blur-md px-4 py-3 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3"
+            >
+                <div
+                    class="flex-1 h-2.5 bg-gray-100 rounded-full overflow-hidden"
+                >
+                    <div
+                        class="h-full bg-gradient-to-r from-cozy-primary to-cozy-accent transition-all duration-700 ease-out rounded-full"
+                        :style="{ width: `${progressPercentage}%` }"
+                    ></div>
+                </div>
+                <span
+                    class="text-xs font-bold text-cozy-primary min-w-[3rem] text-right"
+                >
+                    {{ progressPercentage }}%
+                </span>
+            </div>
+
             <div class="flex flex-wrap gap-2 justify-center mb-8">
                 <button
                     v-for="tag in tags"
@@ -36,7 +67,7 @@ const filteredQuestions = computed(() => {
                     class="px-4 py-1.5 rounded-full text-sm font-bold transition-all duration-300 border"
                     :class="
                         selectedTag === tag
-                            ? 'bg-cozy-primary text-white border-cozy-primary shadow-lg shadow-cozy-primary/20'
+                            ? 'bg-cozy-primary text-white border-cozy-primary shadow-lg shadow-cozy-primary/20 transform scale-105'
                             : 'bg-white text-gray-400 border-gray-100 hover:border-cozy-primary/50 hover:text-cozy-primary'
                     "
                 >

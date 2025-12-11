@@ -1,6 +1,6 @@
 <script setup>
 import { ref, nextTick } from "vue";
-import { marked } from "marked"; // Import library markdown
+import { marked } from "marked";
 import { contextData } from "../data/aiContext.js";
 
 // State
@@ -19,11 +19,12 @@ const chatContainer = ref(null);
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
-// Fungsi untuk mengubah Markdown (**, #, |) menjadi HTML cantik
+// Fungsi Parse Markdown
 const parseMarkdown = (text) => {
     return marked.parse(text);
 };
 
+// Logic Kirim Pesan
 const sendMessage = async () => {
     if (!userInput.value.trim()) return;
 
@@ -67,6 +68,7 @@ const sendMessage = async () => {
         const reply = data.candidates[0].content.parts[0].text;
         messages.value.push({ role: "model", text: reply });
     } catch (error) {
+        console.error(error);
         messages.value.push({
             role: "model",
             text: `Duh error nih: ${error.message} 🥺`,
@@ -89,10 +91,10 @@ const scrollToBottom = async () => {
     <div class="fixed bottom-6 right-6 z-[9999] font-sans">
         <button
             @click="isOpen = !isOpen"
-            class="relative group bg-white p-1.5 rounded-full shadow-soft hover:shadow-lg transition-all hover:-translate-y-1 active:scale-95"
+            class="relative group bg-cozy-card p-1.5 rounded-full shadow-soft hover:shadow-lg transition-all hover:-translate-y-1 active:scale-95 border border-cozy-border"
         >
             <div
-                class="bg-gradient-to-br from-cozy-primary to-cozy-primary/80 text-white w-14 h-14 rounded-full flex items-center justify-center shadow-inner border-2 border-white"
+                class="bg-gradient-to-br from-cozy-primary to-rose-400 text-white w-14 h-14 rounded-full flex items-center justify-center shadow-inner border-2 border-white/20"
             >
                 <span v-if="!isOpen" class="text-2xl animate-bounce">🤖</span>
                 <span v-else class="text-xl font-bold">✕</span>
@@ -101,7 +103,7 @@ const scrollToBottom = async () => {
 
         <div
             v-if="isOpen"
-            class="absolute bottom-20 right-0 w-[90vw] md:w-[400px] bg-white rounded-3xl shadow-2xl border border-white overflow-hidden flex flex-col h-[600px] origin-bottom-right animate-scale-up ring-1 ring-black/5"
+            class="absolute bottom-20 right-0 w-[90vw] md:w-[400px] bg-cozy-card rounded-3xl shadow-2xl border border-cozy-border overflow-hidden flex flex-col h-[600px] origin-bottom-right animate-scale-up ring-1 ring-black/5"
         >
             <div class="bg-cozy-primary p-4 flex items-center gap-3 shadow-sm">
                 <div class="bg-white/20 backdrop-blur-md p-2 rounded-full">
@@ -132,11 +134,11 @@ const scrollToBottom = async () => {
                     "
                 >
                     <div
-                        class="max-w-[85%] px-4 py-3 text-sm shadow-sm"
+                        class="max-w-[85%] px-4 py-3 text-sm shadow-sm transition-colors duration-300"
                         :class="
                             msg.role === 'user'
                                 ? 'bg-cozy-primary text-white rounded-2xl rounded-tr-none'
-                                : 'bg-white text-cozy-text border border-gray-100 rounded-2xl rounded-tl-none'
+                                : 'bg-cozy-card text-cozy-text border border-cozy-border rounded-2xl rounded-tl-none'
                         "
                     >
                         <div
@@ -152,7 +154,7 @@ const scrollToBottom = async () => {
 
                 <div v-if="isLoading" class="flex justify-start">
                     <div
-                        class="bg-white border border-gray-100 px-4 py-3 rounded-2xl rounded-tl-none flex gap-1.5 items-center"
+                        class="bg-cozy-card border border-cozy-border px-4 py-3 rounded-2xl rounded-tl-none flex gap-1.5 items-center transition-colors duration-300"
                     >
                         <div
                             class="w-1.5 h-1.5 bg-cozy-secondary rounded-full animate-bounce"
@@ -167,16 +169,18 @@ const scrollToBottom = async () => {
                 </div>
             </div>
 
-            <div class="p-3 bg-white border-t border-gray-50">
+            <div
+                class="p-3 bg-cozy-card border-t border-cozy-border transition-colors duration-300"
+            >
                 <form
                     @submit.prevent="sendMessage"
-                    class="flex items-center gap-2 bg-gray-50 p-1.5 rounded-full border border-gray-100 focus-within:border-cozy-primary/50 transition-colors"
+                    class="flex items-center gap-2 bg-cozy-bg p-1.5 rounded-full border border-cozy-border focus-within:border-cozy-primary/50 transition-colors duration-300"
                 >
                     <input
                         v-model="userInput"
                         type="text"
                         placeholder="Tanya materi..."
-                        class="flex-1 bg-transparent text-gray-700 text-sm px-3 py-2 outline-none placeholder:text-gray-400 font-sans"
+                        class="flex-1 bg-transparent text-cozy-text text-sm px-3 py-2 outline-none placeholder:text-cozy-muted font-sans"
                     />
                     <button
                         type="submit"
@@ -192,7 +196,7 @@ const scrollToBottom = async () => {
 </template>
 
 <style>
-/* --- CSS KHUSUS UNTUK MEMPERCANTIK OUTPUT AI --- */
+/* CSS Markdown yang Mengikuti Tema (Pakai Var CSS) */
 .prose-content {
     line-height: 1.6;
 }
@@ -200,7 +204,7 @@ const scrollToBottom = async () => {
 /* Bold Text */
 .prose-content strong {
     font-weight: 700;
-    color: #e68e8e; /* cozy-primary */
+    color: var(--c-primary); /* Mengikuti warna primary tema */
 }
 
 /* Headings (###) */
@@ -210,7 +214,7 @@ const scrollToBottom = async () => {
     font-weight: 700;
     margin-top: 12px;
     margin-bottom: 8px;
-    color: #5d5d5d;
+    color: var(--c-text); /* Mengikuti warna teks tema */
 }
 
 /* Lists (Bullet points) */
@@ -231,22 +235,22 @@ const scrollToBottom = async () => {
     border-collapse: collapse;
     margin: 12px 0;
     font-size: 0.9em;
-    background-color: #fff;
+    background-color: var(--c-card); /* Mengikuti background kartu */
     border-radius: 8px;
     overflow: hidden;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
 }
 .prose-content th {
-    background-color: #e68e8e; /* cozy-primary */
+    background-color: var(--c-primary);
     color: white;
     text-align: left;
     padding: 8px 12px;
     font-weight: 600;
 }
 .prose-content td {
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--c-border);
     padding: 8px 12px;
-    color: #5d5d5d;
+    color: var(--c-text);
 }
 .prose-content tr:last-child td {
     border-bottom: none;

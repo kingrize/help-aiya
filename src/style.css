@@ -1,7 +1,60 @@
-/* File: src/style.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Kita hapus rule body yang error tadi.
-   Warna background akan kita pasang di App.vue atau index.html saja */
+:root {
+    /* Default: COZY (Hangat) */
+    --c-bg: #fff8f3;
+    --c-card: #ffffff;
+    --c-text: #4a4a4a; /* Lebih gelap dari sebelumnya biar terbaca */
+    --c-text-muted: #8d8d8d;
+    --c-primary: #e68e8e; /* Dusty Pink */
+    --c-secondary: #9fb8ad; /* Sage Green */
+    --c-accent: #eac286;
+    --c-border: #f3f4f6;
+}
+
+[data-theme="dark"] {
+    /* NIGHT (Gelap & Jelas) */
+    --c-bg: #1e293b; /* Slate 800 */
+    --c-card: #334155; /* Slate 700 */
+    --c-text: #f1f5f9; /* Putih Terang (Slate 100) */
+    --c-text-muted: #94a3b8;
+    --c-primary: #f472b6; /* Pink Neon */
+    --c-secondary: #cbd5e1;
+    --c-accent: #fbbf24;
+    --c-border: #475569;
+}
+
+[data-theme="focus"] {
+    /* FOCUS (Hitam Putih Tajam) */
+    --c-bg: #f8fafc;
+    --c-card: #ffffff;
+    --c-text: #0f172a; /* Hitam Pekat */
+    --c-text-muted: #64748b;
+    --c-primary: #4f46e5; /* Indigo */
+    --c-secondary: #475569;
+    --c-accent: #d97706;
+    --c-border: #e2e8f0;
+}
+
+body {
+    background-color: var(--c-bg);
+    color: var(--c-text);
+    transition:
+        background-color 0.3s ease,
+        color 0.3s ease;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background-color: var(--c-primary);
+    border-radius: 10px;
+    opacity: 0.8;
+}

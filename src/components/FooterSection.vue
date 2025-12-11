@@ -9,7 +9,7 @@
             </p>
         </div>
         <div class="text-xs text-stone-300 mt-6 font-medium">
-            Made with love by your boyfriend
+            Made with love by Jiya
         </div>
     </footer>
 </template>
