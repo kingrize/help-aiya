@@ -5,7 +5,7 @@ import HeaderSection from "../components/HeaderSection.vue";
 import FooterSection from "../components/FooterSection.vue";
 import QuestionCard from "../components/QuestionCard.vue";
 
-// Logic Kartu & Progress
+// Logic Kartu & Progresswdwdwdwdwd
 const revealedCards = ref(new Set());
 
 const toggleCard = (id) => {
@@ -17,7 +17,7 @@ const toggleCard = (id) => {
 };
 
 // Logic Filter
-const selectedTag = ref("Semua");
+const selectedTag = ref("SEMUA");
 const tags = computed(() => ["Semua", ...new Set(questions.map((q) => q.tag))]);
 
 const filteredQuestions = computed(() => {
@@ -107,6 +107,6 @@ const progressPercentage = computed(() => {
 .list-enter-from,
 .list-leave-to {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(21px);
 }
 </style>
