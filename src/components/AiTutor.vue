@@ -113,10 +113,10 @@ const scrollToBottom = async () => {
                     <h3
                         class="text-white font-bold text-sm tracking-wide font-display"
                     >
-                        Tutor Aiya
+                        Jiya Ai
                     </h3>
                     <p class="text-white/80 text-[10px] font-medium">
-                        Powered by Gemini
+                        Powered by Gemini 2.5 flash
                     </p>
                 </div>
             </div>
