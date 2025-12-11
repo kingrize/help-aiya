@@ -2,7 +2,7 @@
 import { ref, nextTick, computed } from "vue";
 import { marked } from "marked";
 import { contextData } from "../data/aiContext.js";
-import { Settings, Key, Check, Cpu } from "lucide-vue-next";
+import { Settings, Key, Check } from "lucide-vue-next";
 
 // --- STATE ---
 const isOpen = ref(false);
@@ -18,16 +18,9 @@ const messages = ref([
 const chatContainer = ref(null);
 
 // --- KONFIGURASI 10 API KEY ---
-const selectedModel = ref("gemini-1.5-flash-latest"); // Default Model
-const selectedKeyIndex = ref(1); // Default Key (1-10)
+const selectedKeyIndex = ref(1); // Default Key ke-1
 
-// Daftar Model
-const models = [
-    { id: "gemini-1.5-flash-latest", name: "1.5 Flash (Cepat)" },
-    { id: "gemini-2.0-flash-exp", name: "2.0 Flash (Pintar)" },
-];
-
-// Ambil 10 Key dari .env secara manual (agar aman dibaca Vite)
+// Ambil 10 Key dari .env
 const apiKeys = {
     1: import.meta.env.VITE_GEMINI_API_KEY || "",
     2: import.meta.env.VITE_GEMINI_API_KEY_2 || "",
@@ -41,10 +34,10 @@ const apiKeys = {
     10: import.meta.env.VITE_GEMINI_API_KEY_10 || "",
 };
 
-// URL API Dinamis
+// URL API (HARDCODED ke Gemini 2.5 Flash sesuai request)
 const currentApiUrl = computed(() => {
     const activeKey = apiKeys[selectedKeyIndex.value];
-    return `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel.value}:generateContent?key=${activeKey}`;
+    return `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`;
 });
 
 // Fungsi Parse Markdown
@@ -75,7 +68,7 @@ const sendMessage = async () => {
       ${contextData}
 
       [SISTEM INFO]
-      Model: ${selectedModel.value}
+      Model: Gemini 2.5 Flash
 
       History Chat: ${messages.value
           .slice(-6)
@@ -163,8 +156,7 @@ const scrollToBottom = async () => {
                             <span
                                 class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"
                             ></span>
-                            Key-{{ selectedKeyIndex }} :
-                            {{ selectedModel.replace("gemini-", "") }}
+                            Gemini 2.5 Flash (Key-{{ selectedKeyIndex }})
                         </p>
                     </div>
                 </div>
@@ -173,7 +165,7 @@ const scrollToBottom = async () => {
                     @click="showSettings = !showSettings"
                     class="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white transition-all"
                     :class="{ 'bg-white/30 rotate-90': showSettings }"
-                    title="Pengaturan"
+                    title="Pengaturan API Key"
                 >
                     <Settings class="w-5 h-5" />
                 </button>
@@ -186,42 +178,15 @@ const scrollToBottom = async () => {
                 <h4
                     class="text-xs font-bold text-cozy-muted uppercase mb-4 tracking-wider"
                 >
-                    Pengaturan Sumber Daya
+                    Ganti "Nyawa" (API Key)
                 </h4>
-
-                <div class="mb-5">
-                    <label
-                        class="flex items-center gap-2 text-sm font-bold text-cozy-text mb-2"
-                    >
-                        <Cpu class="w-4 h-4 text-cozy-primary" /> Model Otak
-                    </label>
-                    <div class="flex flex-col gap-2">
-                        <button
-                            v-for="model in models"
-                            :key="model.id"
-                            @click="selectedModel = model.id"
-                            class="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium border transition-all text-left"
-                            :class="
-                                selectedModel === model.id
-                                    ? 'bg-cozy-bg border-cozy-primary text-cozy-primary'
-                                    : 'border-cozy-border text-cozy-text hover:bg-cozy-bg'
-                            "
-                        >
-                            {{ model.name }}
-                            <Check
-                                v-if="selectedModel === model.id"
-                                class="w-3 h-3"
-                            />
-                        </button>
-                    </div>
-                </div>
 
                 <div>
                     <label
-                        class="flex items-center gap-2 text-sm font-bold text-cozy-text mb-2"
+                        class="flex items-center gap-2 text-sm font-bold text-cozy-text mb-3"
                     >
                         <Key class="w-4 h-4 text-cozy-primary" /> Pilih Slot
-                        Kunci (1-10)
+                        Kunci:
                     </label>
 
                     <div class="grid grid-cols-5 gap-2">
@@ -246,6 +211,10 @@ const scrollToBottom = async () => {
                                 v-if="!apiKeys[i]"
                                 class="absolute bottom-0 left-0 w-full h-1 bg-red-400/50"
                             ></span>
+                            <Check
+                                v-if="selectedKeyIndex === i"
+                                class="absolute top-0.5 right-0.5 w-2 h-2 text-white/80"
+                            />
                         </button>
                     </div>
 
