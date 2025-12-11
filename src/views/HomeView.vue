@@ -17,7 +17,7 @@ const toggleCard = (id) => {
 };
 
 // Logic Filter
-const selectedTag = ref("SEMUA");
+const selectedTag = ref("Semua");
 const tags = computed(() => ["Semua", ...new Set(questions.map((q) => q.tag))]);
 
 const filteredQuestions = computed(() => {
