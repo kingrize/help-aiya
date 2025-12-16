@@ -38,72 +38,85 @@ const isResetting = ref(false);
 const isGeneratingMaterial = ref(false);
 const showResetModal = ref(false);
 
-// AI CONFIG
+// --- AI CONFIG ---
 const currentProvider = ref("gemini");
 const selectedKeyIndex = ref(1);
 const questionCount = ref(5);
-const isAutoKey = ref(true); // Default Auto Nyala
+const isAutoKey = ref(true);
 
+// Definisi Provider dengan Batas Key Berbeda
 const providers = {
-    gemini: { name: "Gemini 2.5", icon: Sparkles, hasMultiKey: true },
-    groq: { name: "Groq Llama 3", icon: Zap, hasMultiKey: false },
-    aiml: { name: "AIML (GPT-4o)", icon: Cloud, hasMultiKey: false }, // Provider Baru
+    gemini: {
+        name: "Gemini 2.5",
+        icon: Sparkles,
+        hasMultiKey: true,
+        maxKeys: 10,
+    },
+    groq: { name: "Groq Llama 3", icon: Zap, hasMultiKey: false, maxKeys: 0 },
+    aiml: { name: "AIML (GPT-4o)", icon: Cloud, hasMultiKey: true, maxKeys: 5 }, // AIML punya 5 Key
 };
 
 // Load API Keys
 const apiKeys = {
     gemini: {},
     groq: import.meta.env.VITE_GROQ_API_KEY || "",
-    aiml: import.meta.env.VITE_AIML_API_KEY || "",
+    aiml: {},
 };
 
+// Load Gemini (1-10)
 for (let i = 1; i <= 10; i++)
     apiKeys.gemini[i] =
         import.meta.env[`VITE_GEMINI_API_KEY${i === 1 ? "" : "_" + i}`] || "";
+// Load AIML (1-5)
+for (let i = 1; i <= 5; i++)
+    apiKeys.aiml[i] = import.meta.env[`VITE_AIML_API_KEY_${i}`] || "";
 
 const subjectTitle = ref("");
 const rawMaterial = ref("");
 const generatedQuestions = ref([]);
 
-// --- HELPER: AUTO KEY SWITCHER & API CALLER ---
+// --- AUTO SWITCHER LOGIC (GENERIC) ---
 const executeWithAutoKey = async (apiCallFunction) => {
-    // 1. Jalur Gemini (Multi Key)
-    if (currentProvider.value === "gemini") {
-        let keysToTry = [];
-        if (isAutoKey.value) {
-            for (let i = 1; i <= 10; i++)
-                if (apiKeys.gemini[i]) keysToTry.push(i);
-        } else {
-            if (apiKeys.gemini[selectedKeyIndex.value])
-                keysToTry.push(selectedKeyIndex.value);
-        }
+    const providerName = currentProvider.value;
 
-        if (keysToTry.length === 0)
-            throw new Error("Tidak ada API Key Gemini tersedia!");
-
-        let lastError = null;
-        for (const index of keysToTry) {
-            try {
-                return await apiCallFunction(apiKeys.gemini[index]);
-            } catch (err) {
-                console.warn(`Key slot ${index} gagal: ${err.message}`);
-                lastError = err;
-            }
-        }
-        throw new Error(
-            lastError?.message || "Semua API Key Gemini limit/error.",
-        );
-    }
-
-    // 2. Jalur Groq
-    else if (currentProvider.value === "groq") {
+    // GROQ (Single Key)
+    if (!providers[providerName].hasMultiKey) {
         return await apiCallFunction(apiKeys.groq);
     }
 
-    // 3. Jalur AIML (GPT-4o) - BARU
-    else if (currentProvider.value === "aiml") {
-        return await apiCallFunction(apiKeys.aiml);
+    // MULTI KEY (GEMINI & AIML)
+    let keysToTry = [];
+    const max = providers[providerName].maxKeys; // Ambil batas max key (10 atau 5)
+    const keysObj = apiKeys[providerName];
+
+    if (isAutoKey.value) {
+        // Auto: Coba semua slot yang ada isinya
+        for (let i = 1; i <= max; i++) if (keysObj[i]) keysToTry.push(i);
+    } else {
+        // Manual: Coba slot terpilih saja
+        if (keysObj[selectedKeyIndex.value])
+            keysToTry.push(selectedKeyIndex.value);
     }
+
+    if (keysToTry.length === 0)
+        throw new Error(`Tidak ada API Key ${providerName} tersedia!`);
+
+    let lastError = null;
+    for (const index of keysToTry) {
+        try {
+            // Coba panggil fungsi dengan key ini
+            return await apiCallFunction(keysObj[index]);
+        } catch (err) {
+            console.warn(
+                `[${providerName}] Key slot ${index} gagal: ${err.message}`,
+            );
+            lastError = err;
+            // Lanjut ke loop berikutnya...
+        }
+    }
+    throw new Error(
+        lastError?.message || `Semua slot energi ${providerName} habis.`,
+    );
 };
 
 // --- LOGIC ---
@@ -170,7 +183,6 @@ const generateMaterialFromTitle = async () => {
                 if (!res.ok) throw new Error(data.error?.message);
                 return data.choices[0].message.content;
             } else if (currentProvider.value === "aiml") {
-                // LOGIC AIML
                 const res = await fetch(
                     "https://api.aimlapi.com/v1/chat/completions",
                     {
@@ -187,8 +199,7 @@ const generateMaterialFromTitle = async () => {
                     },
                 );
                 const data = await res.json();
-                if (!res.ok)
-                    throw new Error(data.error?.message || "AIML Error");
+                if (!res.ok) throw new Error(data.error?.message);
                 return data.choices[0].message.content;
             }
         });
@@ -249,7 +260,6 @@ const generateQuestions = async () => {
                 if (!res.ok) throw new Error(data.error?.message);
                 return data.choices[0].message.content;
             } else if (currentProvider.value === "aiml") {
-                // LOGIC AIML
                 const res = await fetch(
                     "https://api.aimlapi.com/v1/chat/completions",
                     {
@@ -265,8 +275,7 @@ const generateQuestions = async () => {
                     },
                 );
                 const data = await res.json();
-                if (!res.ok)
-                    throw new Error(data.error?.message || "AIML Error");
+                if (!res.ok) throw new Error(data.error?.message);
                 return data.choices[0].message.content;
             }
         });
@@ -332,9 +341,8 @@ const removeDraft = (index) => {
                     class="flex items-center gap-2 px-4 py-2 rounded-full bg-red-50 border border-red-200 text-xs font-bold text-red-500 hover:bg-red-500 hover:text-white transition-all shadow-sm disabled:opacity-50"
                 >
                     <span v-if="isResetting"
-                        ><Loader2 class="w-4 h-4 animate-spin"
-                    /></span>
-                    <span v-else class="flex items-center gap-2"
+                        ><Loader2 class="w-4 h-4 animate-spin" /></span
+                    ><span v-else class="flex items-center gap-2"
                         ><Eraser class="w-4 h-4" /> Reset DB</span
                     >
                 </button>
@@ -400,6 +408,7 @@ const removeDraft = (index) => {
                                 {{ isAutoKey ? "Otomatis" : "Manual" }}
                             </button>
                         </div>
+
                         <div
                             class="grid grid-cols-5 gap-2"
                             :class="{
@@ -408,19 +417,28 @@ const removeDraft = (index) => {
                             }"
                         >
                             <button
-                                v-for="i in 10"
+                                v-for="i in providers[currentProvider].maxKeys"
                                 :key="i"
                                 @click="selectedKeyIndex = i"
-                                class="h-9 rounded-lg flex items-center justify-center text-xs font-bold border transition-all"
-                                :class="
-                                    selectedKeyIndex === i
-                                        ? 'bg-cozy-primary text-white border-cozy-primary'
-                                        : 'bg-cozy-bg border-cozy-border text-cozy-text'
-                                "
+                                class="h-9 rounded-lg flex items-center justify-center text-xs font-bold border transition-all relative overflow-hidden"
+                                :class="[
+                                    apiKeys[currentProvider][i]
+                                        ? selectedKeyIndex === i
+                                            ? 'bg-cozy-primary text-white border-cozy-primary'
+                                            : 'bg-cozy-bg border-cozy-border text-cozy-text'
+                                        : 'bg-cozy-bg/50 border-dashed border-cozy-border text-cozy-muted/30 cursor-not-allowed',
+                                ]"
                             >
                                 {{ i }}
                             </button>
                         </div>
+                        <p
+                            v-if="isAutoKey"
+                            class="text-[10px] text-green-600 mt-2 text-center font-medium bg-green-50 py-1 rounded-lg"
+                        >
+                            ⚡ Mode Pintar: Auto-switch Key
+                            {{ currentProvider.toUpperCase() }}.
+                        </p>
                     </div>
                 </div>
 
@@ -432,7 +450,6 @@ const removeDraft = (index) => {
                     >
                         <BookOpen class="w-4 h-4" /> Input Materi
                     </div>
-
                     <div class="mb-4">
                         <label class="text-xs font-bold text-cozy-muted ml-2"
                             >Tag / Kategori</label
@@ -465,7 +482,6 @@ const removeDraft = (index) => {
                             </button>
                         </div>
                     </div>
-
                     <div class="mb-4">
                         <label class="text-xs font-bold text-cozy-muted ml-2"
                             >Materi Mentah</label
@@ -477,7 +493,6 @@ const removeDraft = (index) => {
                             class="w-full p-4 bg-cozy-bg rounded-2xl border border-cozy-border outline-none text-sm leading-relaxed resize-none"
                         ></textarea>
                     </div>
-
                     <div class="flex items-center justify-between mb-4">
                         <span
                             class="text-xs font-bold text-cozy-muted uppercase"
@@ -491,7 +506,6 @@ const removeDraft = (index) => {
                             class="w-1/2 h-2 bg-cozy-bg rounded-lg appearance-none cursor-pointer accent-cozy-primary"
                         />
                     </div>
-
                     <button
                         @click="generateQuestions"
                         :disabled="isLoading || !rawMaterial"
@@ -500,8 +514,7 @@ const removeDraft = (index) => {
                         <span v-if="isLoading" class="flex gap-2"
                             ><Loader2 class="w-5 h-5 animate-spin" />
                             Proses...</span
-                        >
-                        <span v-else class="flex gap-2"
+                        ><span v-else class="flex gap-2"
                             ><Sparkles class="w-5 h-5" /> Buat Soal</span
                         >
                     </button>
