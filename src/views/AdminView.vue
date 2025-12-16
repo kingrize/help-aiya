@@ -30,8 +30,12 @@ import {
 } from "lucide-vue-next";
 import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
+import { useToast } from "../composables/useToast";
 
 const router = useRouter();
+const { addToast } = useToast();
+
+// --- STATE ---
 const isLoading = ref(false);
 const isSaving = ref(false);
 const isResetting = ref(false);
@@ -44,7 +48,7 @@ const selectedKeyIndex = ref(1);
 const questionCount = ref(5);
 const isAutoKey = ref(true);
 
-// Definisi Provider dengan Batas Key Berbeda
+// Definisi Provider (Semua Support Multi Key sekarang)
 const providers = {
     gemini: {
         name: "Gemini 2.5",
@@ -52,43 +56,50 @@ const providers = {
         hasMultiKey: true,
         maxKeys: 10,
     },
-    groq: { name: "Groq Llama 3", icon: Zap, hasMultiKey: false, maxKeys: 0 },
-    aiml: { name: "AIML (GPT-4o)", icon: Cloud, hasMultiKey: true, maxKeys: 5 }, // AIML punya 5 Key
+    groq: { name: "Groq Llama 3", icon: Zap, hasMultiKey: true, maxKeys: 5 }, // Di-set max 5 untuk jaga-jaga
+    aiml: { name: "AIML (GPT-4o)", icon: Cloud, hasMultiKey: true, maxKeys: 5 },
 };
 
-// Load API Keys
+// --- LOAD API KEYS (PERBAIKAN LOGIC) ---
 const apiKeys = {
     gemini: {},
-    groq: import.meta.env.VITE_GROQ_API_KEY || "",
+    groq: {},
     aiml: {},
 };
 
-// Load Gemini (1-10)
-for (let i = 1; i <= 10; i++)
+// 1. Load Gemini (1-10) - Prioritas format "_1"
+for (let i = 1; i <= 10; i++) {
     apiKeys.gemini[i] =
-        import.meta.env[`VITE_GEMINI_API_KEY${i === 1 ? "" : "_" + i}`] || "";
-// Load AIML (1-5)
-for (let i = 1; i <= 5; i++)
+        import.meta.env[`VITE_GEMINI_API_KEY_${i}`] ||
+        import.meta.env[`VITE_GEMINI_API_KEY`] ||
+        "";
+}
+
+// 2. Load Groq (1-5)
+for (let i = 1; i <= 5; i++) {
+    apiKeys.groq[i] =
+        import.meta.env[`VITE_GROQ_API_KEY_${i}`] ||
+        import.meta.env[`VITE_GROQ_API_KEY`] ||
+        "";
+}
+
+// 3. Load AIML (1-5)
+for (let i = 1; i <= 5; i++) {
     apiKeys.aiml[i] = import.meta.env[`VITE_AIML_API_KEY_${i}`] || "";
+}
 
 const subjectTitle = ref("");
 const rawMaterial = ref("");
 const generatedQuestions = ref([]);
 
-// --- AUTO SWITCHER LOGIC (GENERIC) ---
+// --- AUTO SWITCHER LOGIC ---
 const executeWithAutoKey = async (apiCallFunction) => {
     const providerName = currentProvider.value;
-
-    // GROQ (Single Key)
-    if (!providers[providerName].hasMultiKey) {
-        return await apiCallFunction(apiKeys.groq);
-    }
-
-    // MULTI KEY (GEMINI & AIML)
-    let keysToTry = [];
-    const max = providers[providerName].maxKeys; // Ambil batas max key (10 atau 5)
+    const max = providers[providerName].maxKeys;
     const keysObj = apiKeys[providerName];
 
+    // Tentukan kunci mana saja yang mau dicoba
+    let keysToTry = [];
     if (isAutoKey.value) {
         // Auto: Coba semua slot yang ada isinya
         for (let i = 1; i <= max; i++) if (keysObj[i]) keysToTry.push(i);
@@ -99,13 +110,22 @@ const executeWithAutoKey = async (apiCallFunction) => {
     }
 
     if (keysToTry.length === 0)
-        throw new Error(`Tidak ada API Key ${providerName} tersedia!`);
+        throw new Error(
+            `Tidak ada API Key ${providerName} yang tersedia/diisi di .env!`,
+        );
 
     let lastError = null;
+
+    // Loop percobaan kunci
     for (const index of keysToTry) {
         try {
             // Coba panggil fungsi dengan key ini
-            return await apiCallFunction(keysObj[index]);
+            const result = await apiCallFunction(keysObj[index]);
+
+            // Jika sukses, update UI ke key yang berhasil (jika mode auto)
+            if (isAutoKey.value) selectedKeyIndex.value = index;
+
+            return result;
         } catch (err) {
             console.warn(
                 `[${providerName}] Key slot ${index} gagal: ${err.message}`,
@@ -119,12 +139,14 @@ const executeWithAutoKey = async (apiCallFunction) => {
     );
 };
 
-// --- LOGIC ---
+// --- ACTIONS ---
 const handleLogout = async () => {
     await signOut(auth);
     router.push("/login");
 };
+
 const openResetModal = () => (showResetModal.value = true);
+
 const confirmResetAction = async () => {
     showResetModal.value = false;
     isResetting.value = true;
@@ -133,9 +155,9 @@ const confirmResetAction = async () => {
         await Promise.all(
             querySnapshot.docs.map((d) => deleteDoc(doc(db, "courses", d.id))),
         );
-        alert("✨ Database bersih!");
+        addToast("Database berhasil dikosongkan!", "success");
     } catch (e) {
-        alert("Gagal: " + e.message);
+        addToast("Gagal reset: " + e.message, "error");
     } finally {
         isResetting.value = false;
     }
@@ -143,10 +165,11 @@ const confirmResetAction = async () => {
 
 // --- GENERATE MATERI ---
 const generateMaterialFromTitle = async () => {
-    if (!subjectTitle.value) return alert("Isi Tag dulu!");
+    if (!subjectTitle.value)
+        return addToast("Isi Tag / Kategori dulu!", "error");
     isGeneratingMaterial.value = true;
 
-    const prompt = `Buatkan rangkuman kuliah padat tentang "${subjectTitle.value}". Bahasa Indonesia.`;
+    const prompt = `Buatkan rangkuman kuliah padat tentang "${subjectTitle.value}". Bahasa Indonesia. Fokus pada definisi, konsep utama, dan contoh.`;
 
     try {
         const resultText = await executeWithAutoKey(async (apiKey) => {
@@ -205,8 +228,9 @@ const generateMaterialFromTitle = async () => {
         });
 
         rawMaterial.value = resultText;
+        addToast("Materi berhasil dibuat!", "success");
     } catch (error) {
-        alert("Gagal: " + error.message);
+        addToast("Gagal membuat materi: " + error.message, "error");
     } finally {
         isGeneratingMaterial.value = false;
     }
@@ -215,13 +239,17 @@ const generateMaterialFromTitle = async () => {
 // --- GENERATE SOAL ---
 const generateQuestions = async () => {
     if (!rawMaterial.value || !subjectTitle.value)
-        return alert("Isi lengkap dulu!");
+        return addToast("Isi Tag dan Materi dulu!", "error");
     isLoading.value = true;
     generatedQuestions.value = [];
 
     const prompt = `
-        Buat ${questionCount.value} Flashcard dari: "${rawMaterial.value}".
-        Output JSON Murni: [{"id":1, "tag":"${subjectTitle.value}", "icon":"Brain", "q":"Tanya", "a":"Jawab"}]
+        Bertindaklah sebagai Dosen.
+        TUGAS: Buat ${questionCount.value} Flashcard pertanyaan & jawaban cerdas dari materi: "${rawMaterial.value}".
+
+        ATURAN JSON:
+        Output WAJIB Array of Objects valid (tanpa markdown). Format:
+        [{"id":1, "tag":"${subjectTitle.value}", "icon":"Brain", "q":"Pertanyaan?", "a":"Jawaban."}]
         Pilihan Icon: Brain, MessageCircle, Dna, Lightbulb, Heart, Star, Zap.
     `;
 
@@ -285,8 +313,13 @@ const generateQuestions = async () => {
             ...item,
             id: Date.now() + index,
         }));
+        addToast(
+            `Berhasil membuat ${generatedQuestions.value.length} soal!`,
+            "success",
+        );
     } catch (error) {
-        alert("Gagal: " + error.message);
+        console.error(error);
+        addToast("Gagal generate soal: " + error.message, "error");
     } finally {
         isLoading.value = false;
     }
@@ -301,16 +334,17 @@ const saveToDatabase = async () => {
             createdAt: new Date(),
             questionsList: generatedQuestions.value,
         });
-        alert("Berhasil disimpan! 🎉");
+        addToast("Berhasil disimpan ke Database! 🎉", "success");
         subjectTitle.value = "";
         rawMaterial.value = "";
         generatedQuestions.value = [];
     } catch (error) {
-        alert("Gagal menyimpan: " + error.message);
+        addToast("Gagal menyimpan: " + error.message, "error");
     } finally {
         isSaving.value = false;
     }
 };
+
 const removeDraft = (index) => {
     generatedQuestions.value.splice(index, 1);
 };
@@ -331,7 +365,11 @@ const removeDraft = (index) => {
             class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center mb-8 pt-4 gap-4"
         >
             <div>
-                <h1 class="font-display text-2xl font-bold">Admin Dashboard</h1>
+                <h1
+                    class="font-display text-2xl md:text-3xl font-bold text-cozy-text"
+                >
+                    Admin Dashboard
+                </h1>
                 <p class="text-sm text-cozy-muted">AI Content Generator</p>
             </div>
             <div class="flex gap-3">
@@ -341,8 +379,9 @@ const removeDraft = (index) => {
                     class="flex items-center gap-2 px-4 py-2 rounded-full bg-red-50 border border-red-200 text-xs font-bold text-red-500 hover:bg-red-500 hover:text-white transition-all shadow-sm disabled:opacity-50"
                 >
                     <span v-if="isResetting"
-                        ><Loader2 class="w-4 h-4 animate-spin" /></span
-                    ><span v-else class="flex items-center gap-2"
+                        ><Loader2 class="w-4 h-4 animate-spin"
+                    /></span>
+                    <span v-else class="flex items-center gap-2"
                         ><Eraser class="w-4 h-4" /> Reset DB</span
                     >
                 </button>
@@ -420,6 +459,7 @@ const removeDraft = (index) => {
                                 v-for="i in providers[currentProvider].maxKeys"
                                 :key="i"
                                 @click="selectedKeyIndex = i"
+                                :disabled="!apiKeys[currentProvider][i]"
                                 class="h-9 rounded-lg flex items-center justify-center text-xs font-bold border transition-all relative overflow-hidden"
                                 :class="[
                                     apiKeys[currentProvider][i]
@@ -436,8 +476,7 @@ const removeDraft = (index) => {
                             v-if="isAutoKey"
                             class="text-[10px] text-green-600 mt-2 text-center font-medium bg-green-50 py-1 rounded-lg"
                         >
-                            ⚡ Mode Pintar: Auto-switch Key
-                            {{ currentProvider.toUpperCase() }}.
+                            ⚡ Mode Pintar: Auto-switch Key Aktif.
                         </p>
                     </div>
                 </div>
@@ -450,6 +489,7 @@ const removeDraft = (index) => {
                     >
                         <BookOpen class="w-4 h-4" /> Input Materi
                     </div>
+
                     <div class="mb-4">
                         <label class="text-xs font-bold text-cozy-muted ml-2"
                             >Tag / Kategori</label
@@ -471,6 +511,7 @@ const removeDraft = (index) => {
                                     isGeneratingMaterial || !subjectTitle
                                 "
                                 class="w-14 flex items-center justify-center bg-cozy-accent text-white rounded-2xl shadow-md hover:bg-yellow-400 active:scale-95 transition-all disabled:opacity-50"
+                                title="Generate Materi dari Judul"
                             >
                                 <Wand2
                                     v-if="!isGeneratingMaterial"
@@ -482,6 +523,7 @@ const removeDraft = (index) => {
                             </button>
                         </div>
                     </div>
+
                     <div class="mb-4">
                         <label class="text-xs font-bold text-cozy-muted ml-2"
                             >Materi Mentah</label
@@ -493,6 +535,7 @@ const removeDraft = (index) => {
                             class="w-full p-4 bg-cozy-bg rounded-2xl border border-cozy-border outline-none text-sm leading-relaxed resize-none"
                         ></textarea>
                     </div>
+
                     <div class="flex items-center justify-between mb-4">
                         <span
                             class="text-xs font-bold text-cozy-muted uppercase"
@@ -506,6 +549,7 @@ const removeDraft = (index) => {
                             class="w-1/2 h-2 bg-cozy-bg rounded-lg appearance-none cursor-pointer accent-cozy-primary"
                         />
                     </div>
+
                     <button
                         @click="generateQuestions"
                         :disabled="isLoading || !rawMaterial"
@@ -536,6 +580,7 @@ const removeDraft = (index) => {
                         {{ isSaving ? "Menyimpan..." : "Simpan Semua" }}
                     </button>
                 </div>
+
                 <div v-if="generatedQuestions.length" class="space-y-4 pb-12">
                     <div
                         v-for="(card, index) in generatedQuestions"
@@ -558,6 +603,7 @@ const removeDraft = (index) => {
                         <Save class="w-5 h-5" /> Simpan Database
                     </button>
                 </div>
+
                 <div
                     v-else
                     class="h-[400px] flex flex-col items-center justify-center text-center border-2 border-dashed border-cozy-border rounded-[32px] p-8 opacity-50"

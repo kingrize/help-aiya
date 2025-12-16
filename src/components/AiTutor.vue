@@ -1,8 +1,10 @@
 <script setup>
-import { ref, nextTick } from "vue";
+import { ref, nextTick, onMounted } from "vue";
 import { marked } from "marked";
 import { contextData } from "../data/aiContext.js";
 import { playPop } from "../utils/sound.js";
+import { collection, getDocs, query } from "firebase/firestore";
+import { db } from "../firebase.js";
 import {
     Settings,
     X,
@@ -24,6 +26,7 @@ import {
     GraduationCap,
     Star,
     Cloud,
+    BrainCircuit,
 } from "lucide-vue-next";
 
 // --- STATE ---
@@ -32,36 +35,51 @@ const showSettings = ref(false);
 const userInput = ref("");
 const isLoading = ref(false);
 const chatContainer = ref(null);
+const availableTopics = ref([]);
 const messages = ref([
     {
         role: "model",
-        text: "Halo Aiya! 👋 Aku siap bantu kamu belajar topik apa saja hari ini. Mau bahas apa?",
+        text: "Halo Aiya! 👋 Aku siap bantu kamu belajar. Mau bahas materi yang ada di database atau topik bebas?",
     },
 ]);
 
 // Quick Prompts
 const quickPrompts = [
-    { text: "Jelaskan konsep dasar... 🧠", icon: BookOpen },
-    { text: "Berikan contoh nyata... 🌍", icon: Lightbulb },
-    { text: "Buatkan ringkasan singkat 📝", icon: Zap },
-    { text: "Semangatin aku dong! ✨", icon: Smile },
+    { text: "Ada materi apa aja? 📚", icon: BookOpen },
+    { text: "Jelaskan konsep dasar... 🧠", icon: Lightbulb },
+    { text: "Tes aku dong! 📝", icon: Zap },
+    { text: "Semangatin aku! ✨", icon: Smile },
 ];
 
 // --- CONFIG ---
 const currentProvider = ref("gemini");
 const selectedKeyIndex = ref(1);
-const isAutoKey = ref(true);
 const selectedPersona = ref("friend");
+const isAutoKey = ref(true); // Layer 1: Pindah Key otomatis
+const isAutoModel = ref(true); // Layer 2: Pindah AI otomatis (Hybrid)
 
 const providers = {
     gemini: {
         name: "Gemini 2.5 Flash",
         icon: Sparkles,
+        desc: "Cerdas & Gratis",
         hasMultiKey: true,
         maxKeys: 10,
     },
-    groq: { name: "Groq Llama 3", icon: Zap, hasMultiKey: false, maxKeys: 0 },
-    aiml: { name: "AIML (GPT-4o)", icon: Cloud, hasMultiKey: true, maxKeys: 5 }, // UPDATE: Multi Key Aktif (5 Slot)
+    groq: {
+        name: "Groq Llama 3",
+        icon: Zap,
+        desc: "Super Cepat",
+        hasMultiKey: true,
+        maxKeys: 5,
+    }, // Groq Multi Key
+    aiml: {
+        name: "AIML (GPT-4o)",
+        icon: Cloud,
+        desc: "Model Canggih",
+        hasMultiKey: true,
+        maxKeys: 5,
+    },
 };
 
 const personas = {
@@ -95,25 +113,39 @@ const personas = {
     },
 };
 
-// Load API Keys
-const apiKeys = {
-    gemini: {},
-    groq: import.meta.env.VITE_GROQ_API_KEY || "",
-    aiml: {}, // Wadah key AIML
-};
+// --- LOAD API KEYS ---
+const apiKeys = { gemini: {}, groq: {}, aiml: {} };
 
-// Load Gemini (1-10)
-for (let i = 1; i <= 10; i++) {
+for (let i = 1; i <= 10; i++)
     apiKeys.gemini[i] =
-        import.meta.env[`VITE_GEMINI_API_KEY${i === 1 ? "" : "_" + i}`] || "";
-}
-
-// Load AIML (1-5)
-for (let i = 1; i <= 5; i++) {
+        import.meta.env[`VITE_GEMINI_API_KEY_${i}`] ||
+        import.meta.env[`VITE_GEMINI_API_KEY`] ||
+        "";
+for (let i = 1; i <= 5; i++)
+    apiKeys.groq[i] =
+        import.meta.env[`VITE_GROQ_API_KEY_${i}`] ||
+        import.meta.env[`VITE_GROQ_API_KEY`] ||
+        "";
+for (let i = 1; i <= 5; i++)
     apiKeys.aiml[i] = import.meta.env[`VITE_AIML_API_KEY_${i}`] || "";
-}
 
 const parseMarkdown = (text) => marked.parse(text);
+
+// --- FETCH CONTEXT ---
+onMounted(async () => {
+    try {
+        const q = query(collection(db, "courses"));
+        const snapshot = await getDocs(q);
+        const titles = new Set();
+        snapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.title) titles.add(data.title);
+        });
+        availableTopics.value = Array.from(titles);
+    } catch (e) {
+        console.error("Gagal load context:", e);
+    }
+});
 
 // --- ACTIONS ---
 const toggleChat = () => {
@@ -124,7 +156,6 @@ const closeChat = () => {
     playPop();
     isOpen.value = false;
 };
-
 const usePrompt = (text) => {
     userInput.value = text;
     const inputEl = document.querySelector(
@@ -133,7 +164,59 @@ const usePrompt = (text) => {
     if (inputEl) inputEl.focus();
 };
 
-// --- LOGIC PINTAR: SEND MESSAGE ---
+// --- HELPER: CALL SPECIFIC API ---
+const callProviderApi = async (providerName, apiKey, payloadData) => {
+    if (providerName === "gemini") {
+        const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ contents: payloadData.gemini }),
+            },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "Gemini Error");
+        return data.candidates?.[0]?.content?.parts?.[0]?.text;
+    } else if (providerName === "groq") {
+        const res = await fetch(
+            "https://api.groq.com/openai/v1/chat/completions",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: payloadData.openai,
+                    temperature: 0.7,
+                }),
+            },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "Groq Error");
+        return data.choices?.[0]?.message?.content;
+    } else if (providerName === "aiml") {
+        const res = await fetch("https://api.aimlapi.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-4o",
+                messages: payloadData.openai,
+                max_tokens: 1000,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "AIML Error");
+        return data.choices?.[0]?.message?.content;
+    }
+};
+
+// --- LOGIC UTAMA: HYBRID AUTO SWITCH ---
 const sendMessage = async () => {
     if (!userInput.value.trim()) return;
     playPop();
@@ -144,161 +227,110 @@ const sendMessage = async () => {
     isLoading.value = true;
     scrollToBottom();
 
+    // Prepare Prompts
     const personaInstruction = personas[selectedPersona.value].instruction;
-    const systemInstruction = `${contextData} [SISTEM] Model: ${providers[currentProvider.value].name}. [GAYA BICARA] ${personaInstruction}`;
+    const knowledgeBaseInfo =
+        availableTopics.value.length > 0
+            ? `[INFO DATABASE] Materi Aiya: ${availableTopics.value.join(", ")}.`
+            : `[INFO DATABASE] Database kosong.`;
+    const systemInstruction = `${contextData} ${knowledgeBaseInfo} [PERAN] ${personaInstruction}`;
+
+    // Prepare Payloads
+    const payloadGemini = [
+        { role: "user", parts: [{ text: systemInstruction }] },
+        ...messages.value
+            .slice(-6)
+            .map((m) => ({
+                role: m.role === "user" ? "user" : "model",
+                parts: [{ text: m.text }],
+            })),
+        { role: "user", parts: [{ text: userText }] },
+    ];
+    const payloadOpenAI = [
+        { role: "system", content: systemInstruction },
+        ...messages.value
+            .slice(-6)
+            .map((m) => ({
+                role: m.role === "model" ? "assistant" : "user",
+                content: m.text,
+            })),
+        { role: "user", content: userText },
+    ];
+    const payloads = { gemini: payloadGemini, openai: payloadOpenAI };
 
     try {
         let reply = "";
+        let success = false;
 
-        // HELPER: Switcher Logic
-        const runMultiKeyProvider = async (providerName, apiCall) => {
-            let success = false;
-            let keysToTry = [];
-            const max = providers[providerName].maxKeys;
-            const keysObj = apiKeys[providerName];
-
-            if (isAutoKey.value) {
-                // Auto: Coba semua slot yang ada isinya
-                for (let i = 1; i <= max; i++)
-                    if (keysObj[i]) keysToTry.push(i);
-            } else {
-                // Manual: Coba slot terpilih saja
-                if (keysObj[selectedKeyIndex.value])
-                    keysToTry.push(selectedKeyIndex.value);
-            }
-
-            if (keysToTry.length === 0)
-                throw new Error(
-                    `Tidak ada API Key ${providerName} yang tersedia!`,
-                );
-
-            for (const keyIndex of keysToTry) {
-                try {
-                    const activeKey = keysObj[keyIndex];
-                    const result = await apiCall(activeKey);
-                    reply = result;
-                    success = true;
-                    if (isAutoKey.value) selectedKeyIndex.value = keyIndex;
-                    break;
-                } catch (err) {
-                    console.warn(
-                        `[${providerName}] Slot ${keyIndex} gagal: ${err.message}`,
-                    );
-                }
-            }
-            if (!success)
-                throw new Error(`Semua slot energi ${providerName} habis!`);
-        };
-
-        // 1. JALUR GEMINI
-        if (currentProvider.value === "gemini") {
-            await runMultiKeyProvider("gemini", async (apiKey) => {
-                const res = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            contents: [
-                                {
-                                    role: "user",
-                                    parts: [{ text: systemInstruction }],
-                                },
-                                ...messages.value
-                                    .slice(-6)
-                                    .map((m) => ({
-                                        role:
-                                            m.role === "user"
-                                                ? "user"
-                                                : "model",
-                                        parts: [{ text: m.text }],
-                                    })),
-                                { role: "user", parts: [{ text: userText }] },
-                            ],
-                        }),
-                    },
-                );
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error?.message || "Error");
-                return data.candidates?.[0]?.content?.parts?.[0]?.text;
-            });
-        }
-
-        // 2. JALUR GROQ
-        else if (currentProvider.value === "groq") {
-            const activeKey = apiKeys.groq;
-            if (!activeKey) throw new Error("API Key Groq kosong.");
-            const res = await fetch(
-                "https://api.groq.com/openai/v1/chat/completions",
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${activeKey}`,
-                    },
-                    body: JSON.stringify({
-                        model: "llama-3.3-70b-versatile",
-                        messages: [
-                            { role: "system", content: systemInstruction },
-                            ...messages.value
-                                .slice(-6)
-                                .map((m) => ({
-                                    role:
-                                        m.role === "model"
-                                            ? "assistant"
-                                            : "user",
-                                    content: m.text,
-                                })),
-                            { role: "user", content: userText },
-                        ],
-                        temperature: 0.7,
-                    }),
-                },
+        // LAYER 1: Tentukan Urutan Provider (Hybrid Failover)
+        let providerOrder = [currentProvider.value];
+        if (isAutoModel.value) {
+            const others = Object.keys(providers).filter(
+                (k) => k !== currentProvider.value,
             );
-            const data = await res.json();
-            reply = data.choices?.[0]?.message?.content;
+            providerOrder = [...providerOrder, ...others];
         }
 
-        // 3. JALUR AIML (UPDATE MULTI KEY)
-        else if (currentProvider.value === "aiml") {
-            await runMultiKeyProvider("aiml", async (apiKey) => {
-                const res = await fetch(
-                    "https://api.aimlapi.com/v1/chat/completions",
-                    {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            Authorization: `Bearer ${apiKey}`,
-                        },
-                        body: JSON.stringify({
-                            model: "gpt-4o",
-                            messages: [
-                                { role: "system", content: systemInstruction },
-                                ...messages.value
-                                    .slice(-6)
-                                    .map((m) => ({
-                                        role:
-                                            m.role === "model"
-                                                ? "assistant"
-                                                : "user",
-                                        content: m.text,
-                                    })),
-                                { role: "user", content: userText },
-                            ],
-                            max_tokens: 1000,
-                        }),
-                    },
-                );
-                const data = await res.json();
-                if (!res.ok)
-                    throw new Error(data.error?.message || "Error AIML");
-                return data.choices?.[0]?.message?.content;
-            });
+        for (const providerName of providerOrder) {
+            try {
+                // LAYER 2: Tentukan Kunci (Auto Key)
+                let keysToTry = [];
+                const max = providers[providerName].maxKeys;
+
+                if (isAutoKey.value) {
+                    for (let i = 1; i <= max; i++)
+                        if (apiKeys[providerName][i])
+                            keysToTry.push(apiKeys[providerName][i]);
+                } else {
+                    // Manual (Fallback ke auto jika key terpilih kosong)
+                    const selected =
+                        apiKeys[providerName][selectedKeyIndex.value];
+                    if (selected && providerName === currentProvider.value) {
+                        keysToTry.push(selected);
+                    } else {
+                        // Jika manual tapi pindah ke provider cadangan, paksa auto
+                        for (let i = 1; i <= max; i++)
+                            if (apiKeys[providerName][i])
+                                keysToTry.push(apiKeys[providerName][i]);
+                    }
+                }
+
+                if (keysToTry.length === 0) continue;
+
+                // Loop Keys
+                for (const apiKey of keysToTry) {
+                    try {
+                        reply = await callProviderApi(
+                            providerName,
+                            apiKey,
+                            payloads,
+                        );
+                        if (reply) {
+                            success = true;
+                            break;
+                        }
+                    } catch (keyErr) {
+                        console.warn(
+                            `[${providerName}] Key failed:`,
+                            keyErr.message,
+                        );
+                    }
+                }
+
+                if (success) break; // Keluar loop provider jika sudah berhasil
+            } catch (provErr) {
+                console.warn(`Provider ${providerName} failed.`);
+            }
         }
 
-        messages.value.push({ role: "model", text: reply || "Maaf, error." });
+        if (!success) throw new Error("Semua AI sedang sibuk atau limit! 😭");
+
+        messages.value.push({ role: "model", text: reply });
     } catch (error) {
-        messages.value.push({ role: "model", text: `Error: ${error.message}` });
+        messages.value.push({
+            role: "model",
+            text: `⚠️ **Error:** ${error.message}`,
+        });
     } finally {
         isLoading.value = false;
         scrollToBottom();
@@ -345,9 +377,9 @@ defineExpose({ handleExternalPrompt });
                             <div
                                 class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-cozy-bg flex items-center justify-center"
                                 :class="
-                                    isAutoKey
-                                        ? 'bg-cozy-accent animate-pulse'
-                                        : 'bg-cozy-primary'
+                                    isAutoKey || isAutoModel
+                                        ? 'bg-green-400 animate-pulse'
+                                        : 'bg-yellow-400'
                                 "
                             >
                                 <span
@@ -402,7 +434,7 @@ defineExpose({ handleExternalPrompt });
                         class="absolute inset-0 z-50 bg-cozy-bg flex flex-col p-6 animate-in fade-in zoom-in-95 duration-200 overflow-y-auto"
                     >
                         <div
-                            class="flex items-center gap-2 mb-8 text-cozy-muted cursor-pointer hover:text-cozy-primary transition-colors group"
+                            class="flex items-center gap-2 mb-6 text-cozy-muted cursor-pointer hover:text-cozy-primary transition-colors group"
                             @click="
                                 playPop();
                                 showSettings = false;
@@ -417,6 +449,40 @@ defineExpose({ handleExternalPrompt });
                                 class="text-xs font-bold uppercase tracking-widest"
                                 >Kembali ke Chat</span
                             >
+                        </div>
+
+                        <div
+                            class="bg-cozy-card p-4 rounded-2xl border border-cozy-border mb-6 flex items-center justify-between shadow-sm"
+                        >
+                            <div class="flex items-center gap-3">
+                                <div
+                                    class="p-2 bg-green-100 dark:bg-green-900/30 text-green-600 rounded-xl"
+                                >
+                                    <BrainCircuit class="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <h4
+                                        class="text-xs font-bold text-cozy-text"
+                                    >
+                                        Hybrid AI Mode
+                                    </h4>
+                                    <p class="text-[10px] text-cozy-muted">
+                                        Pindah AI lain jika error.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                @click="isAutoModel = !isAutoModel"
+                                class="w-10 h-6 rounded-full transition-colors relative"
+                                :class="
+                                    isAutoModel ? 'bg-green-500' : 'bg-gray-300'
+                                "
+                            >
+                                <div
+                                    class="w-4 h-4 bg-white rounded-full absolute top-1 transition-all shadow-sm"
+                                    :class="isAutoModel ? 'left-5' : 'left-1'"
+                                ></div>
+                            </button>
                         </div>
 
                         <div class="space-y-8">
@@ -561,7 +627,13 @@ defineExpose({ handleExternalPrompt });
                                     </button>
                                 </div>
 
-                                <div class="grid grid-cols-5 gap-2">
+                                <div
+                                    class="grid grid-cols-5 gap-2"
+                                    :class="{
+                                        'opacity-60 pointer-events-none grayscale':
+                                            isAutoKey,
+                                    }"
+                                >
                                     <button
                                         v-for="i in providers[currentProvider]
                                             .maxKeys"
