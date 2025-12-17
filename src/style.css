@@ -4,61 +4,29 @@
 @tailwind utilities;
 
 :root {
-    /* 1. COZY THEME (Default) */
+    /* --- 1. DEFAULT COZY (Rose) --- */
+    /* Menggelapkan text color (sebelumnya #5d5d5d) agar lebih kontras */
     --c-bg: #fff8f3;
-    /* Kartu Putih Transparan (Glass) */
-    --c-card: rgba(255, 255, 255, 0.65);
-    --c-text: #5d5d5d;
-    --c-text-muted: #8d8d8d;
+    --c-card: rgba(255, 255, 255, 0.75); /* Sedikit lebih solid */
+    --c-text: #4b5563; /* Gray 600 - Lebih gelap/bacaable */
+    --c-text-muted: #6b7280; /* Gray 500 */
+    --c-border: rgba(229, 231, 235, 0.6);
+
     --c-primary: #e68e8e;
     --c-secondary: #9fb8ad;
     --c-accent: #eac286;
-    /* Border juga transparan */
-    --c-border: rgba(243, 244, 246, 0.6);
+    --c-shadow: rgba(230, 142, 142, 0.15);
 
-    /* KHUSUS USER BUBBLE */
     --c-user-bg: #e68e8e;
     --c-user-text: #ffffff;
-}
-
-[data-theme="dark"] {
-    /* 2. DARK THEME */
-    --c-bg: #0f172a;
-    /* Kartu Gelap Transparan (Glass Dark) */
-    --c-card: rgba(30, 41, 59, 0.7);
-    --c-text: #e2e8f0;
-    --c-text-muted: #94a3b8;
-    --c-primary: #f472b6;
-    --c-secondary: #64748b;
-    --c-accent: #fbbf24;
-    --c-border: rgba(51, 65, 85, 0.5);
-
-    --c-user-bg: #f472b6;
-    --c-user-text: #ffffff;
-}
-
-[data-theme="focus"] {
-    /* 3. FOCUS THEME (High Contrast) */
-    --c-bg: #f9fafb;
-    /* Focus Theme biasanya lebih solid agar mudah dibaca */
-    --c-card: #ffffff;
-    --c-text: #111827;
-    --c-text-muted: #4b5563;
-    --c-primary: #171717;
-    --c-secondary: #525252;
-    --c-accent: #262626;
-    --c-border: #e5e7eb;
-
-    --c-user-bg: #e5e7eb;
-    --c-user-text: #111827;
 }
 
 body {
     background-color: var(--c-bg);
     color: var(--c-text);
     transition:
-        background-color 0.4s ease,
-        color 0.4s ease;
+        background-color 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+        color 0.5s ease;
 }
 
 /* Scrollbar Custom */
@@ -72,4 +40,12 @@ body {
     background-color: var(--c-primary);
     border-radius: 99px;
     opacity: 0.5;
+}
+
+/* Utility Class untuk Glassmorphism */
+.glass-panel {
+    background: var(--c-card);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--c-border);
 }

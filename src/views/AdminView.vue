@@ -18,7 +18,6 @@ import {
     Save,
     Trash2,
     BookOpen,
-    FileText,
     Layers,
     Loader2,
     Eraser,
@@ -26,14 +25,16 @@ import {
     Settings2,
     Check,
     Wand2,
-    BatteryCharging,
-    Power,
     Cloud,
     BrainCircuit,
     Library,
     X,
     Calendar,
     FileQuestion,
+    UploadCloud,
+    FileText,
+    ArrowRight,
+    Workflow,
 } from "lucide-vue-next";
 import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
@@ -48,10 +49,12 @@ const isSaving = ref(false);
 const isResetting = ref(false);
 const isGeneratingMaterial = ref(false);
 const showResetModal = ref(false);
-
 const showMaterialsModal = ref(false);
 const existingCourses = ref([]);
 const isLoadingMaterials = ref(false);
+const pdfFile = ref(null);
+const pdfFileName = ref("");
+const processingStage = ref(""); // Status text (English)
 
 // --- AI CONFIG ---
 const currentProvider = ref("gemini");
@@ -64,14 +67,19 @@ const providers = {
     gemini: {
         name: "Gemini 2.5",
         icon: Sparkles,
-        desc: "Cerdas & Gratis",
+        desc: "Multimodal (Vision & Text)",
         maxKeys: 10,
     },
-    groq: { name: "Groq Llama 3", icon: Zap, desc: "Super Cepat", maxKeys: 5 },
+    groq: {
+        name: "Groq Llama 3",
+        icon: Zap,
+        desc: "High-Speed Inference",
+        maxKeys: 5,
+    },
     aiml: {
         name: "AIML (GPT-4o)",
         icon: Cloud,
-        desc: "Model Premium",
+        desc: "Premium Model",
         maxKeys: 5,
     },
 };
@@ -95,23 +103,63 @@ const subjectTitle = ref("");
 const rawMaterial = ref("");
 const generatedQuestions = ref([]);
 
+// --- HELPER: FILE TO BASE64 ---
+const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+        if (file.type !== "application/pdf") {
+            addToast("Unsupported file type. PDF only.", "error");
+            return;
+        }
+        pdfFile.value = file;
+        pdfFileName.value = file.name;
+        if (!subjectTitle.value) {
+            subjectTitle.value = file.name
+                .replace(/\.pdf$/i, "")
+                .replace(/[-_]/g, " ");
+        }
+    }
+};
+
+const fileToGenerativePart = async (file) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const base64String = reader.result.split(",")[1];
+            resolve({
+                inlineData: { data: base64String, mimeType: file.type },
+            });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+};
+
 // --- HELPER: API CALLER ---
-const callProviderApi = async (providerName, apiKey, prompt) => {
+const callProviderApi = async (
+    providerName,
+    apiKey,
+    prompt,
+    filePart = null,
+) => {
     if (providerName === "gemini") {
+        const parts = [{ text: prompt }];
+        if (filePart) parts.push(filePart);
+
         const res = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }],
-                }),
+                body: JSON.stringify({ contents: [{ parts: parts }] }),
             },
         );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Gemini Error");
+        if (!res.ok) throw new Error(data.error?.message || "Gemini API Error");
         return data.candidates?.[0]?.content?.parts?.[0]?.text;
     } else if (providerName === "groq") {
+        if (filePart)
+            throw new Error("Groq does not support Direct File Upload.");
         const res = await fetch(
             "https://api.groq.com/openai/v1/chat/completions",
             {
@@ -127,9 +175,11 @@ const callProviderApi = async (providerName, apiKey, prompt) => {
             },
         );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Groq Error");
+        if (!res.ok) throw new Error(data.error?.message || "Groq API Error");
         return data.choices?.[0]?.message?.content;
     } else if (providerName === "aiml") {
+        if (filePart)
+            throw new Error("AIML does not support Direct File Upload.");
         const res = await fetch("https://api.aimlapi.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -143,74 +193,200 @@ const callProviderApi = async (providerName, apiKey, prompt) => {
             }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "AIML Error");
+        if (!res.ok) throw new Error(data.error?.message || "AIML API Error");
         return data.choices?.[0]?.message?.content;
     }
 };
 
-// --- LOGIC: HYBRID SYSTEM ---
-const executeHybridRequest = async (prompt) => {
-    let finalResult = null;
-    let success = false;
-    let providerOrder = [currentProvider.value];
-    if (isAutoModel.value) {
-        const others = Object.keys(providers).filter(
-            (k) => k !== currentProvider.value,
-        );
-        providerOrder = [...providerOrder, ...others];
+// --- HELPER: KEY ROTATION ---
+const tryProviderWithRotation = async (
+    providerName,
+    prompt,
+    filePart = null,
+) => {
+    let keysToTry = [];
+    const max = providers[providerName].maxKeys;
+
+    if (isAutoKey.value) {
+        for (let i = 1; i <= max; i++)
+            if (apiKeys[providerName][i])
+                keysToTry.push(apiKeys[providerName][i]);
+    } else {
+        const selected = apiKeys[providerName][selectedKeyIndex.value];
+        if (selected) keysToTry.push(selected);
+        else
+            for (let i = 1; i <= max; i++)
+                if (apiKeys[providerName][i])
+                    keysToTry.push(apiKeys[providerName][i]);
     }
 
-    for (const providerName of providerOrder) {
+    if (keysToTry.length === 0)
+        throw new Error(
+            `No API Keys configured for ${providers[providerName].name}`,
+        );
+
+    for (const apiKey of keysToTry) {
         try {
-            let keysToTry = [];
-            const max = providers[providerName].maxKeys;
-
-            if (isAutoKey.value) {
-                for (let i = 1; i <= max; i++)
-                    if (apiKeys[providerName][i])
-                        keysToTry.push(apiKeys[providerName][i]);
-            } else {
-                const selected = apiKeys[providerName][selectedKeyIndex.value];
-                if (selected && providerName === currentProvider.value)
-                    keysToTry.push(selected);
-                else
-                    for (let i = 1; i <= max; i++)
-                        if (apiKeys[providerName][i])
-                            keysToTry.push(apiKeys[providerName][i]);
-            }
-
-            if (keysToTry.length === 0) continue;
-
-            for (const apiKey of keysToTry) {
-                try {
-                    finalResult = await callProviderApi(
-                        providerName,
-                        apiKey,
-                        prompt,
-                    );
-                    if (finalResult) {
-                        success = true;
-                        if (providerName !== currentProvider.value)
-                            addToast(
-                                `⚠️ ${providers[currentProvider.value].name} sibuk, beralih ke ${providers[providerName].name}`,
-                                "info",
-                            );
-                        break;
-                    }
-                } catch (keyErr) {
-                    console.warn(`Key failed`);
-                }
-            }
-            if (success) break;
-        } catch (provErr) {
-            console.warn(`Provider failed`);
+            const result = await callProviderApi(
+                providerName,
+                apiKey,
+                prompt,
+                filePart,
+            );
+            if (result) return result;
+        } catch (err) {
+            console.warn(`[${providerName}] Key Error, rotating...`);
         }
     }
-    if (!success) throw new Error("Semua AI sedang sibuk/limit.");
-    return finalResult;
+    throw new Error(`All keys exhausted for ${providerName}.`);
 };
 
-// --- ACTIONS ---
+// --- CORE LOGIC: AI RELAY PIPELINE ---
+const generateQuestions = async () => {
+    if (!subjectTitle.value || (!rawMaterial.value && !pdfFile.value)) {
+        return addToast("Missing Title or Source Material!", "error");
+    }
+
+    isLoading.value = true;
+    generatedQuestions.value = [];
+
+    try {
+        let extractedText = rawMaterial.value;
+        let filePart = null;
+
+        // --- STEP 1: PDF EXTRACTION (Gemini Vision) ---
+        if (pdfFile.value) {
+            processingStage.value = "Gemini Vision: Scanning PDF..."; // KEREN 1
+            try {
+                filePart = await fileToGenerativePart(pdfFile.value);
+
+                // Jika provider BUKAN Gemini, lakukan estafet
+                if (currentProvider.value !== "gemini") {
+                    const extractionPrompt = `
+                        TASK: Extract all educational text from this PDF.
+                        OUTPUT: Pure text only. No commentary.
+                    `;
+                    // Relay: Gemini reads -> Text
+                    extractedText = await tryProviderWithRotation(
+                        "gemini",
+                        extractionPrompt,
+                        filePart,
+                    );
+                    addToast(
+                        "PDF Extracted! Handing over to " +
+                            providers[currentProvider.value].name,
+                        "success",
+                    );
+                    filePart = null; // Clear file, now we use text
+                }
+            } catch (e) {
+                throw new Error("PDF Processing Failed: " + e.message);
+            }
+        }
+
+        // --- STEP 2: CONTENT GENERATION (Selected Provider) ---
+        processingStage.value = `${providers[currentProvider.value].name} Engine: Generating...`; // KEREN 2
+
+        const finalPrompt = `
+            ACT AS: Expert Professor.
+            ORIGINAL TOPIC: "${subjectTitle.value}"
+
+            TASK 1 (SMART TAGGING):
+            Analyze the "ORIGINAL TOPIC". Create a SHORT, CATCHY TAG (Max 2-3 words).
+            Example: "Anxiety Remaja", "Sejarah RI".
+
+            TASK 2 (CONTENT GENERATION):
+            Study the provided material carefully.
+            Create ${questionCount.value} Flashcard Questions (Multiple Choice/Short Answer).
+            Ensure the answer (a) is comprehensive and educational.
+
+            OUTPUT FORMAT (Strict JSON Array):
+            [{"id":1, "tag":"[AI_GENERATED_TAG]", "icon":"Brain", "q":"Question?", "a":"Answer."}]
+
+            Allowed Icons: Brain, MessageCircle, Dna, Lightbulb, Heart, Star, Zap.
+
+            ${filePart ? "SOURCE: ATTACHED PDF DOCUMENT" : `SOURCE MATERIAL:\n"${extractedText}"`}
+        `;
+
+        let result = await tryProviderWithRotation(
+            currentProvider.value,
+            finalPrompt,
+            filePart,
+        );
+
+        // Clean & Parse
+        result = result.replace(/```json|```/g, "").trim();
+        const firstBracket = result.indexOf("[");
+        const lastBracket = result.lastIndexOf("]");
+
+        if (firstBracket !== -1 && lastBracket !== -1) {
+            const cleanJson = result.substring(firstBracket, lastBracket + 1);
+            const parsed = JSON.parse(cleanJson);
+            generatedQuestions.value = parsed.map((item, index) => ({
+                ...item,
+                id: Date.now() + index,
+                tag: item.tag || subjectTitle.value,
+            }));
+            addToast(
+                `Success! ${generatedQuestions.value.length} items generated.`,
+                "success",
+            );
+        } else {
+            throw new Error("Invalid JSON response from AI.");
+        }
+    } catch (error) {
+        console.error("Pipeline Error:", error);
+        addToast(error.message, "error");
+    } finally {
+        isLoading.value = false;
+        processingStage.value = "";
+    }
+};
+
+const generateMaterialFromTitle = async () => {
+    if (!subjectTitle.value) return addToast("Tag/Title Required!", "error");
+    isGeneratingMaterial.value = true;
+    const prompt = `Buatkan rangkuman kuliah padat tentang "${subjectTitle.value}". Bahasa Indonesia.`;
+    try {
+        const result = await tryProviderWithRotation(
+            currentProvider.value,
+            prompt,
+        );
+        rawMaterial.value = result;
+        addToast("Material Generated!", "success");
+    } catch (error) {
+        addToast(error.message, "error");
+    } finally {
+        isGeneratingMaterial.value = false;
+    }
+};
+
+const saveToDatabase = async () => {
+    if (generatedQuestions.value.length === 0) return;
+    isSaving.value = true;
+    try {
+        await addDoc(collection(db, "courses"), {
+            title: subjectTitle.value,
+            createdAt: new Date(),
+            questionsList: generatedQuestions.value,
+        });
+        addToast("Saved to Database! 🎉", "success");
+        subjectTitle.value = "";
+        rawMaterial.value = "";
+        generatedQuestions.value = [];
+        pdfFile.value = null;
+        pdfFileName.value = "";
+        const fileInput = document.getElementById("pdf-upload");
+        if (fileInput) fileInput.value = "";
+    } catch (error) {
+        addToast("Save Failed: " + error.message, "error");
+    } finally {
+        isSaving.value = false;
+    }
+};
+const removeDraft = (index) => {
+    generatedQuestions.value.splice(index, 1);
+};
 const handleLogout = async () => {
     await signOut(auth);
     router.push("/login");
@@ -224,15 +400,13 @@ const confirmResetAction = async () => {
         await Promise.all(
             querySnapshot.docs.map((d) => deleteDoc(doc(db, "courses", d.id))),
         );
-        addToast("Database berhasil dikosongkan!", "success");
+        addToast("Database Reset Successful.", "success");
     } catch (e) {
-        addToast("Gagal reset: " + e.message, "error");
+        addToast("Reset Failed: " + e.message, "error");
     } finally {
         isResetting.value = false;
     }
 };
-
-// --- FEATURE: MANAGE MATERIALS (FIXED UI) ---
 const openMaterialsModal = async () => {
     showMaterialsModal.value = true;
     isLoadingMaterials.value = true;
@@ -248,25 +422,23 @@ const openMaterialsModal = async () => {
             ...doc.data(),
         }));
     } catch (e) {
-        addToast("Gagal ambil data: " + e.message, "error");
+        addToast("Fetch Error: " + e.message, "error");
     } finally {
         isLoadingMaterials.value = false;
     }
 };
-
 const deleteCourse = async (id, title) => {
-    if (!confirm(`Yakin hapus "${title}"?`)) return; // Bisa diganti ConfirmModal nanti
+    if (!confirm(`Delete "${title}"?`)) return;
     try {
         await deleteDoc(doc(db, "courses", id));
         existingCourses.value = existingCourses.value.filter(
             (c) => c.id !== id,
         );
-        addToast(`Materi dihapus.`, "success");
+        addToast(`Material Deleted.`, "success");
     } catch (e) {
-        addToast("Gagal hapus: " + e.message, "error");
+        addToast("Delete Failed: " + e.message, "error");
     }
 };
-
 const formatDate = (timestamp) => {
     if (!timestamp) return "-";
     return new Date(timestamp.seconds * 1000).toLocaleDateString("id-ID", {
@@ -274,75 +446,6 @@ const formatDate = (timestamp) => {
         month: "short",
         year: "numeric",
     });
-};
-
-// --- GENERATORS ---
-const generateMaterialFromTitle = async () => {
-    if (!subjectTitle.value) return addToast("Isi Tag dulu!", "error");
-    isGeneratingMaterial.value = true;
-    const prompt = `Buatkan rangkuman kuliah padat tentang "${subjectTitle.value}". Bahasa Indonesia.`;
-    try {
-        const result = await executeHybridRequest(prompt);
-        rawMaterial.value = result;
-        addToast("Materi berhasil dibuat!", "success");
-    } catch (error) {
-        addToast(error.message, "error");
-    } finally {
-        isGeneratingMaterial.value = false;
-    }
-};
-
-const generateQuestions = async () => {
-    if (!rawMaterial.value || !subjectTitle.value)
-        return addToast("Isi lengkap dulu!", "error");
-    isLoading.value = true;
-    generatedQuestions.value = [];
-    const prompt = `
-        Bertindaklah sebagai Dosen.
-        TUGAS: Buat ${questionCount.value} Flashcard dari: "${rawMaterial.value}".
-        OUTPUT JSON MURNI: [{"id":1, "tag":"${subjectTitle.value}", "icon":"Brain", "q":"?", "a":"."}]
-        Pilihan Icon: Brain, MessageCircle, Dna, Lightbulb, Heart, Star, Zap.
-    `;
-    try {
-        let result = await executeHybridRequest(prompt);
-        result = result.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(result);
-        generatedQuestions.value = parsed.map((item, index) => ({
-            ...item,
-            id: Date.now() + index,
-        }));
-        addToast(
-            `Berhasil membuat ${generatedQuestions.value.length} soal!`,
-            "success",
-        );
-    } catch (error) {
-        addToast(error.message, "error");
-    } finally {
-        isLoading.value = false;
-    }
-};
-
-const saveToDatabase = async () => {
-    if (generatedQuestions.value.length === 0) return;
-    isSaving.value = true;
-    try {
-        await addDoc(collection(db, "courses"), {
-            title: subjectTitle.value,
-            createdAt: new Date(),
-            questionsList: generatedQuestions.value,
-        });
-        addToast("Tersimpan ke Database! 🎉", "success");
-        subjectTitle.value = "";
-        rawMaterial.value = "";
-        generatedQuestions.value = [];
-    } catch (error) {
-        addToast("Gagal menyimpan: " + error.message, "error");
-    } finally {
-        isSaving.value = false;
-    }
-};
-const removeDraft = (index) => {
-    generatedQuestions.value.splice(index, 1);
 };
 </script>
 
@@ -352,8 +455,8 @@ const removeDraft = (index) => {
     >
         <ConfirmModal
             :isOpen="showResetModal"
-            title="Hapus Semua?"
-            message="Aksi ini permanen."
+            title="Delete All Data?"
+            message="This action is permanent."
             @close="showResetModal = false"
             @confirm="confirmResetAction"
             :isDanger="true"
@@ -368,7 +471,6 @@ const removeDraft = (index) => {
                     class="absolute inset-0 bg-black/20 backdrop-blur-sm transition-opacity"
                     @click="showMaterialsModal = false"
                 ></div>
-
                 <div
                     class="bg-cozy-card w-full max-w-2xl max-h-[80vh] rounded-[32px] shadow-2xl border border-cozy-border flex flex-col relative z-10 overflow-hidden animate-in zoom-in-95 duration-200"
                 >
@@ -383,10 +485,10 @@ const removeDraft = (index) => {
                             </div>
                             <div>
                                 <h3 class="font-bold text-lg text-cozy-text">
-                                    Materi Tersedia
+                                    Library
                                 </h3>
                                 <p class="text-xs text-cozy-muted">
-                                    Kelola data yang ada di website.
+                                    Manage existing content.
                                 </p>
                             </div>
                         </div>
@@ -397,7 +499,6 @@ const removeDraft = (index) => {
                             <X class="w-5 h-5" />
                         </button>
                     </div>
-
                     <div
                         class="flex-1 overflow-y-auto p-6 space-y-3 bg-cozy-bg"
                     >
@@ -409,10 +510,9 @@ const removeDraft = (index) => {
                                 class="w-8 h-8 text-cozy-primary animate-spin mb-2"
                             />
                             <p class="text-xs text-cozy-muted">
-                                Mengambil data...
+                                Fetching data...
                             </p>
                         </div>
-
                         <div
                             v-else-if="existingCourses.length > 0"
                             v-for="course in existingCourses"
@@ -439,7 +539,7 @@ const removeDraft = (index) => {
                                                 course.questionsList?.length ||
                                                 0
                                             }}
-                                            Soal</span
+                                            Items</span
                                         >
                                         <span
                                             class="text-[10px] text-cozy-muted flex items-center gap-1"
@@ -454,18 +554,17 @@ const removeDraft = (index) => {
                             <button
                                 @click="deleteCourse(course.id, course.title)"
                                 class="p-2 text-cozy-muted hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                                title="Hapus materi ini"
+                                title="Delete"
                             >
                                 <Trash2 class="w-4 h-4" />
                             </button>
                         </div>
-
                         <div
                             v-else
                             class="text-center py-12 opacity-50 text-cozy-muted"
                         >
                             <Library class="w-12 h-12 mx-auto mb-2" />
-                            <p class="text-sm font-bold">Database Kosong</p>
+                            <p class="text-sm font-bold">Database Empty</p>
                         </div>
                     </div>
                 </div>
@@ -500,15 +599,13 @@ const removeDraft = (index) => {
                         </div>
                     </div>
                 </div>
-
                 <div class="flex gap-2">
                     <button
                         @click="openMaterialsModal"
                         class="flex items-center gap-2 px-4 py-2 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-primary hover:text-white hover:border-cozy-primary transition-all"
                     >
-                        <Library class="w-4 h-4" /> Materi Tersedia
+                        <Library class="w-4 h-4" /> Library
                     </button>
-
                     <button
                         @click="openResetModal"
                         :disabled="isResetting"
@@ -516,12 +613,11 @@ const removeDraft = (index) => {
                     >
                         <Eraser class="w-4 h-4" /> Reset DB
                     </button>
-
                     <button
                         @click="handleLogout"
                         class="flex items-center gap-2 px-4 py-2 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-cozy-bg transition-all"
                     >
-                        <LogOut class="w-4 h-4" /> Keluar
+                        <LogOut class="w-4 h-4" /> Exit
                     </button>
                 </div>
             </div>
@@ -537,7 +633,6 @@ const removeDraft = (index) => {
                     <div
                         class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cozy-primary to-cozy-accent"
                     ></div>
-
                     <div class="flex justify-between items-center mb-6">
                         <h3
                             class="text-sm font-bold text-cozy-text flex items-center gap-2"
@@ -545,27 +640,7 @@ const removeDraft = (index) => {
                             <BrainCircuit class="w-4 h-4 text-cozy-primary" />
                             AI Core
                         </h3>
-                        <button
-                            @click="isAutoModel = !isAutoModel"
-                            class="flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold border transition-all"
-                            :class="
-                                isAutoModel
-                                    ? 'bg-green-100 text-green-700 border-green-200'
-                                    : 'bg-cozy-bg text-cozy-muted border-cozy-border'
-                            "
-                        >
-                            <span
-                                class="w-1.5 h-1.5 rounded-full"
-                                :class="
-                                    isAutoModel
-                                        ? 'bg-green-500 animate-ping'
-                                        : 'bg-gray-400'
-                                "
-                            ></span>
-                            {{ isAutoModel ? "Hybrid ON" : "Hybrid OFF" }}
-                        </button>
                     </div>
-
                     <div class="grid grid-cols-3 gap-2 mb-6">
                         <button
                             v-for="(prov, key) in providers"
@@ -578,8 +653,10 @@ const removeDraft = (index) => {
                                     : 'bg-cozy-bg border-cozy-border text-cozy-muted hover:border-cozy-primary/50'
                             "
                         >
-                            <component :is="prov.icon" class="w-5 h-5 mb-1" />
-                            <span class="text-[9px] font-bold">{{
+                            <component
+                                :is="prov.icon"
+                                class="w-5 h-5 mb-1"
+                            /><span class="text-[9px] font-bold">{{
                                 prov.name
                             }}</span>
                             <div
@@ -590,7 +667,6 @@ const removeDraft = (index) => {
                             </div>
                         </button>
                     </div>
-
                     <div
                         class="bg-cozy-bg/50 rounded-2xl p-4 border border-cozy-border"
                     >
@@ -598,8 +674,7 @@ const removeDraft = (index) => {
                             <span
                                 class="text-[10px] font-bold text-cozy-muted uppercase flex items-center gap-1"
                                 ><Zap class="w-3 h-3" /> Energy Cells</span
-                            >
-                            <button
+                            ><button
                                 @click="isAutoKey = !isAutoKey"
                                 class="text-[10px] font-bold px-2 py-1 rounded-lg border transition-all"
                                 :class="
@@ -635,6 +710,28 @@ const removeDraft = (index) => {
                             </button>
                         </div>
                     </div>
+
+                    <div
+                        v-if="pdfFile && currentProvider !== 'gemini'"
+                        class="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-3 animate-in fade-in"
+                    >
+                        <div
+                            class="p-2 bg-blue-100 rounded-full text-blue-600 shadow-sm"
+                        >
+                            <Workflow class="w-4 h-4" />
+                        </div>
+                        <div>
+                            <p
+                                class="text-[10px] font-bold text-blue-700 uppercase tracking-wide"
+                            >
+                                AI Relay Pipeline Active
+                            </p>
+                            <p class="text-[10px] text-blue-600 leading-tight">
+                                Gemini (Vision) <span class="mx-1">&rarr;</span>
+                                {{ providers[currentProvider].name }} (Logic)
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
                 <div
@@ -650,7 +747,7 @@ const removeDraft = (index) => {
                         <div>
                             <label
                                 class="text-[10px] font-bold text-cozy-muted uppercase mb-1 block ml-1"
-                                >Topik / Judul</label
+                                >Topic / Title</label
                             >
                             <div class="flex gap-2">
                                 <div class="flex-1 relative">
@@ -659,7 +756,7 @@ const removeDraft = (index) => {
                                     /><input
                                         v-model="subjectTitle"
                                         type="text"
-                                        placeholder="Misal: Psikologi Kognitif"
+                                        placeholder="Ex: Cognitive Psychology"
                                         class="w-full pl-9 pr-4 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all"
                                     />
                                 </div>
@@ -669,6 +766,7 @@ const removeDraft = (index) => {
                                         isGeneratingMaterial || !subjectTitle
                                     "
                                     class="w-12 flex items-center justify-center bg-gradient-to-br from-cozy-accent to-yellow-500 text-white rounded-xl shadow-md hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
+                                    title="AI Generate Material"
                                 >
                                     <Loader2
                                         v-if="isGeneratingMaterial"
@@ -677,24 +775,92 @@ const removeDraft = (index) => {
                                 </button>
                             </div>
                         </div>
-                        <div>
-                            <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 block ml-1"
-                                >Materi Sumber</label
-                            >
+
+                        <div class="space-y-2">
+                            <div class="flex justify-between items-center px-1">
+                                <label
+                                    class="text-[10px] font-bold text-cozy-muted uppercase block"
+                                    >Source Material</label
+                                >
+                                <span
+                                    v-if="pdfFile"
+                                    class="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in"
+                                    ><Check class="w-3 h-3" /> PDF Ready</span
+                                >
+                            </div>
+
+                            <div class="relative group">
+                                <input
+                                    type="file"
+                                    id="pdf-upload"
+                                    accept="application/pdf"
+                                    @change="handleFileUpload"
+                                    class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                />
+                                <div
+                                    class="w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 text-center"
+                                    :class="
+                                        pdfFile
+                                            ? 'bg-green-50/50 border-green-200'
+                                            : 'bg-cozy-bg border-cozy-border group-hover:border-cozy-primary/50'
+                                    "
+                                >
+                                    <div
+                                        v-if="!pdfFile"
+                                        class="text-cozy-muted group-hover:text-cozy-primary transition-colors flex flex-col items-center"
+                                    >
+                                        <UploadCloud class="w-6 h-6 mb-1" />
+                                        <span class="text-xs font-bold"
+                                            >Upload Lecture PDF</span
+                                        >
+                                        <span class="text-[9px] opacity-70"
+                                            >Click or drag file here</span
+                                        >
+                                    </div>
+                                    <div
+                                        v-else
+                                        class="text-green-700 flex flex-col items-center w-full overflow-hidden"
+                                    >
+                                        <FileText class="w-6 h-6 mb-1" />
+                                        <span
+                                            class="text-xs font-bold truncate max-w-[200px]"
+                                            >{{ pdfFileName }}</span
+                                        >
+                                        <span
+                                            class="text-[9px] opacity-70 text-green-600"
+                                            >Click to change file</span
+                                        >
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="relative flex py-1 items-center">
+                                <div
+                                    class="flex-grow border-t border-cozy-border"
+                                ></div>
+                                <span
+                                    class="flex-shrink-0 mx-2 text-[9px] text-cozy-muted font-bold uppercase"
+                                    >OR PASTE TEXT</span
+                                >
+                                <div
+                                    class="flex-grow border-t border-cozy-border"
+                                ></div>
+                            </div>
+
                             <textarea
                                 v-model="rawMaterial"
-                                rows="10"
-                                placeholder="Paste materi kuliah disini..."
+                                rows="4"
+                                placeholder="Paste text here if you don't have PDF..."
                                 class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-xs leading-relaxed text-cozy-text focus:border-cozy-primary outline-none resize-none transition-all"
                             ></textarea>
                         </div>
+
                         <div
                             class="bg-cozy-bg rounded-xl p-3 border border-cozy-border flex items-center gap-4"
                         >
                             <span
                                 class="text-xs font-bold text-cozy-text whitespace-nowrap"
-                                >{{ questionCount }} Soal</span
+                                >{{ questionCount }} Items</span
                             >
                             <input
                                 type="range"
@@ -704,9 +870,10 @@ const removeDraft = (index) => {
                                 class="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-cozy-primary"
                             />
                         </div>
+
                         <button
                             @click="generateQuestions"
-                            :disabled="isLoading || !rawMaterial"
+                            :disabled="isLoading || (!rawMaterial && !pdfFile)"
                             class="w-full py-4 rounded-xl bg-cozy-primary text-white font-bold shadow-lg shadow-cozy-primary/20 hover:shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 flex justify-center gap-2 relative overflow-hidden group"
                         >
                             <div
@@ -715,14 +882,14 @@ const removeDraft = (index) => {
                             <span
                                 v-if="isLoading"
                                 class="flex items-center gap-2"
-                                ><Loader2 class="w-5 h-5 animate-spin" /> Sedang
-                                Berpikir...</span
+                                ><Loader2 class="w-5 h-5 animate-spin" />
+                                {{ processingStage || "Processing..." }}</span
                             >
                             <span
                                 v-else
                                 class="flex items-center gap-2 relative z-10"
-                                ><Sparkles class="w-5 h-5" /> Buat Soal
-                                Sekarang</span
+                                ><Sparkles class="w-5 h-5" /> Generate
+                                Magic</span
                             >
                         </button>
                     </div>
@@ -734,7 +901,7 @@ const removeDraft = (index) => {
                     <h3
                         class="text-sm font-bold text-cozy-muted uppercase tracking-widest flex items-center gap-2"
                     >
-                        <Check class="w-4 h-4" /> Preview Hasil
+                        <Check class="w-4 h-4" /> Live Preview
                         <span
                             class="bg-cozy-bg border border-cozy-border px-2 py-0.5 rounded-md text-cozy-text"
                             >{{ generatedQuestions.length }}</span
@@ -746,7 +913,7 @@ const removeDraft = (index) => {
                         :disabled="isSaving"
                         class="text-xs font-bold text-cozy-primary hover:bg-cozy-primary/10 px-3 py-1.5 rounded-lg transition-all"
                     >
-                        {{ isSaving ? "Menyimpan..." : "Simpan Semua" }}
+                        {{ isSaving ? "Saving..." : "Save All" }}
                     </button>
                 </div>
                 <div
@@ -759,11 +926,10 @@ const removeDraft = (index) => {
                         <Sparkles class="w-8 h-8 text-cozy-muted" />
                     </div>
                     <h4 class="font-bold text-cozy-text text-lg">
-                        Area Kerja Kosong
+                        Workspace Empty
                     </h4>
                     <p class="text-xs text-cozy-muted mt-1 max-w-xs">
-                        Pilih konfigurasi di sebelah kiri, masukkan materi, lalu
-                        klik tombol Generate.
+                        Upload a PDF or paste text, then hit Generate.
                     </p>
                 </div>
                 <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4 pb-12">
@@ -785,9 +951,10 @@ const removeDraft = (index) => {
                         />
                     </div>
                 </div>
+
                 <div
                     v-if="generatedQuestions.length > 0"
-                    class="fixed bottom-6 right-6 lg:hidden z-40"
+                    class="fixed bottom-28 right-6 lg:hidden z-40"
                 >
                     <button
                         @click="saveToDatabase"

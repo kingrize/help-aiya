@@ -17,10 +17,9 @@ import {
 
 const router = useRouter();
 
-// --- CONFIG: LOAD ALL KEYS ---
-// Kita muat semua kunci yang tersedia di .env
+// --- CONFIG: LOAD ALL KEYS (Client Side) ---
 const apiKeys = [];
-// Coba muat VITE_GEMINI_API_KEY utama
+// Muat VITE_GEMINI_API_KEY utama
 if (import.meta.env.VITE_GEMINI_API_KEY)
     apiKeys.push(import.meta.env.VITE_GEMINI_API_KEY);
 // Muat kunci cadangan 1-10
@@ -39,6 +38,7 @@ const score = ref(0);
 const selectedAnswer = ref(null);
 const showExplanation = ref(false);
 const loadingMessage = ref("Sedang menyiapkan ujian...");
+const errorMessage = ref("");
 
 // --- SETUP ---
 onMounted(async () => {
@@ -58,11 +58,12 @@ onMounted(async () => {
     }
 });
 
-// --- SMART GENERATOR ---
+// --- SMART GENERATOR (CLIENT SIDE - GEMINI 2.5) ---
 const startQuiz = async (topic) => {
     selectedTopic.value = topic;
     gameState.value = "loading";
     loadingMessage.value = "Membaca materi...";
+    errorMessage.value = "";
     playPop();
 
     try {
@@ -93,16 +94,16 @@ const startQuiz = async (topic) => {
             .join("\n");
 
         const prompt = `
-            Bertindaklah sebagai Pembuat Soal Ujian Psikologi.
+            Bertindaklah sebagai Pembuat Soal Ujian.
             MATERI: ${contextString}
             TUGAS: Buat 5 Soal Pilihan Ganda (Multiple Choice) unik dari materi di atas.
-            ATURAN JSON: Output WAJIB Array JSON valid.
-            [{"question": "...", "options": ["A", "B", "C", "D"], "answer": 0, "explanation": "..."}]
+            FORMAT JSON: HANYA Array JSON Valid.
+            CONTOH: [{"question": "...", "options": ["A", "B", "C", "D"], "answer": 0, "explanation": "..."}]
         `;
 
         loadingMessage.value = "Meracik soal ujian...";
 
-        // 2. LOGIC AUTO-SWITCH KEY (SMART RETRY)
+        // 2. LOGIC AUTO-SWITCH KEY (Client Side)
         let success = false;
         let finalResult = null;
 
@@ -113,6 +114,8 @@ const startQuiz = async (topic) => {
         for (const [index, key] of apiKeys.entries()) {
             try {
                 console.log(`Mencoba Key ke-${index + 1}...`);
+
+                // --- UPDATE: MENGGUNAKAN GEMINI 2.5 FLASH (WAJIB) ---
                 const response = await fetch(
                     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
                     {
@@ -126,33 +129,60 @@ const startQuiz = async (topic) => {
 
                 const data = await response.json();
 
-                // Jika error dari Google (misal limit/429)
-                if (!response.ok)
+                // Cek jika error quota/limit dari Google
+                if (!response.ok) {
+                    console.warn(
+                        `Key ${index + 1} Error:`,
+                        data.error?.message,
+                    );
                     throw new Error(data.error?.message || "API Error");
+                }
 
-                // Jika berhasil
-                let textResult = data.candidates[0].content.parts[0].text
-                    .replace(/```json|```/g, "")
-                    .trim();
-                finalResult = JSON.parse(textResult);
-                success = true;
-                break; // Keluar loop
+                let textResult = data.candidates[0].content.parts[0].text;
+
+                // --- JSON PARSING ROBUST ---
+                // 1. Bersihkan markdown block
+                textResult = textResult.replace(/```json|```/g, "").trim();
+
+                // 2. Cari kurung siku pertama '[' dan terakhir ']'
+                const firstBracket = textResult.indexOf("[");
+                const lastBracket = textResult.lastIndexOf("]");
+
+                if (firstBracket !== -1 && lastBracket !== -1) {
+                    const cleanJson = textResult.substring(
+                        firstBracket,
+                        lastBracket + 1,
+                    );
+                    finalResult = JSON.parse(cleanJson);
+                    success = true;
+                    console.log("Berhasil dengan Key ke-", index + 1);
+                    break; // Berhasil! Keluar loop
+                } else {
+                    throw new Error("Format JSON tidak valid");
+                }
             } catch (err) {
-                console.warn(`Key ke-${index + 1} gagal: ${err.message}`);
-                // Lanjut ke key berikutnya...
+                console.warn(
+                    `Key ke-${index + 1} gagal/limit. Lanjut ke key berikutnya...`,
+                );
+                // Lanjut loop ke key berikutnya
             }
         }
 
         if (!success)
             throw new Error(
-                "Semua server sibuk (API Limit). Coba lagi nanti ya! 😭",
+                "Semua server (API Keys) sibuk atau habis kuota. Coba lagi besok!",
             );
 
         quizData.value = finalResult;
         gameState.value = "playing";
     } catch (error) {
-        alert("Gagal membuat soal: " + error.message);
-        gameState.value = "setup";
+        console.error(error);
+        errorMessage.value = error.message;
+        loadingMessage.value = "Gagal memuat soal";
+        // Auto reset setelah 4 detik jika gagal
+        setTimeout(() => {
+            gameState.value = "setup";
+        }, 4000);
     }
 };
 
@@ -189,15 +219,6 @@ const retry = () => {
     <div
         class="min-h-screen bg-cozy-bg text-cozy-text p-6 flex flex-col items-center justify-center font-sans"
     >
-        <div v-if="gameState === 'setup'" class="absolute top-6 left-6">
-            <button
-                @click="router.push('/')"
-                class="flex items-center gap-2 text-sm font-bold text-cozy-muted hover:text-cozy-primary transition-colors"
-            >
-                <ChevronLeft class="w-5 h-5" /> Kembali
-            </button>
-        </div>
-
         <div
             v-if="gameState === 'setup'"
             class="w-full max-w-md text-center space-y-8 animate-fade-in-up"
@@ -238,6 +259,12 @@ const retry = () => {
             >
                 Belum ada materi. Minta Admin generate dulu!
             </div>
+            <button
+                @click="router.push('/')"
+                class="text-sm font-bold text-cozy-muted hover:text-cozy-primary mt-8 inline-block"
+            >
+                Kembali ke Home
+            </button>
         </div>
 
         <div
@@ -248,6 +275,12 @@ const retry = () => {
             <h3 class="font-bold text-xl text-cozy-text">
                 {{ loadingMessage }}
             </h3>
+            <p
+                v-if="errorMessage"
+                class="text-red-500 text-sm font-bold bg-red-50 p-2 rounded-lg max-w-xs mx-auto"
+            >
+                {{ errorMessage }}
+            </p>
             <div
                 class="flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 px-3 py-1 rounded-full w-fit mx-auto"
             >
@@ -285,7 +318,7 @@ const retry = () => {
                         :key="idx"
                         @click="handleAnswer(idx)"
                         :disabled="selectedAnswer !== null"
-                        class="w-full p-4 rounded-xl border-2 text-left text-sm font-medium transition-all relative overflow-hidden"
+                        class="w-full p-4 rounded-xl border-2 text-left text-sm font-medium transition-all relative overflow-hidden flex justify-between items-center"
                         :class="[
                             selectedAnswer === null
                                 ? 'border-cozy-border hover:border-cozy-primary/50 hover:bg-cozy-bg'
@@ -296,46 +329,34 @@ const retry = () => {
                                     : 'border-gray-100 opacity-50',
                         ]"
                     >
-                        <div
-                            class="flex justify-between items-center relative z-10"
-                        >
-                            <span>{{ opt }}</span>
-                            <CheckCircle
-                                v-if="
-                                    selectedAnswer !== null &&
-                                    idx ===
-                                        quizData[currentQuestionIndex].answer
-                                "
-                                class="w-5 h-5 text-green-500"
-                            />
-                            <XCircle
-                                v-if="
-                                    selectedAnswer === idx &&
-                                    idx !==
-                                        quizData[currentQuestionIndex].answer
-                                "
-                                class="w-5 h-5 text-red-500"
-                            />
-                        </div>
+                        <span>{{ opt }}</span>
+                        <CheckCircle
+                            v-if="
+                                selectedAnswer !== null &&
+                                idx === quizData[currentQuestionIndex].answer
+                            "
+                            class="w-5 h-5 text-green-500 shrink-0"
+                        />
+                        <XCircle
+                            v-if="
+                                selectedAnswer === idx &&
+                                idx !== quizData[currentQuestionIndex].answer
+                            "
+                            class="w-5 h-5 text-red-500 shrink-0"
+                        />
                     </button>
                 </div>
             </div>
 
             <div v-if="showExplanation" class="animate-fade-up">
                 <div
-                    class="bg-blue-50 border border-blue-100 p-4 rounded-2xl mb-4 flex gap-3"
+                    class="bg-blue-50 border border-blue-100 p-4 rounded-2xl mb-4 text-sm text-blue-900 leading-relaxed"
                 >
-                    <Sparkles class="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
-                    <div>
-                        <h4
-                            class="text-xs font-bold text-blue-600 uppercase mb-1"
-                        >
-                            Pembahasan AI
-                        </h4>
-                        <p class="text-sm text-blue-800 leading-relaxed">
-                            {{ quizData[currentQuestionIndex].explanation }}
-                        </p>
-                    </div>
+                    <span
+                        class="font-bold block mb-1 text-blue-600 uppercase text-xs"
+                        >Pembahasan AI</span
+                    >
+                    {{ quizData[currentQuestionIndex].explanation }}
                 </div>
                 <button
                     @click="nextQuestion"
@@ -365,21 +386,18 @@ const retry = () => {
                     Skor Kamu
                 </div>
             </div>
-
             <div class="text-6xl font-display font-bold text-cozy-primary">
                 {{ score }}
             </div>
-
             <p class="text-cozy-text font-medium px-4">
                 {{
                     score === 100
-                        ? "Sempurna! Aiya jenius banget! 🎉"
+                        ? "Sempurna! Aiya jenius banget! 脂"
                         : score >= 60
-                          ? "Lumayan! Belajar dikit lagi ya 💪"
-                          : "Waduh... ayo baca materi lagi! 😅"
+                          ? "Lumayan! Belajar dikit lagi ya 潮"
+                          : "Waduh... ayo baca materi lagi! "
                 }}
             </p>
-
             <div class="grid grid-cols-2 gap-3 pt-4">
                 <button
                     @click="retry"
