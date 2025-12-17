@@ -35,6 +35,8 @@ import {
     FileText,
     ArrowRight,
     Workflow,
+    Lock,
+    Globe,
 } from "lucide-vue-next";
 import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
@@ -54,7 +56,7 @@ const existingCourses = ref([]);
 const isLoadingMaterials = ref(false);
 const pdfFile = ref(null);
 const pdfFileName = ref("");
-const processingStage = ref(""); // Status text (English)
+const processingStage = ref("");
 
 // --- AI CONFIG ---
 const currentProvider = ref("gemini");
@@ -62,6 +64,7 @@ const selectedKeyIndex = ref(1);
 const questionCount = ref(5);
 const isAutoKey = ref(true);
 const isAutoModel = ref(true);
+const generationMode = ref("hard"); // 'hard' (Strict) or 'soft' (Smart/Expanded)
 
 const providers = {
     gemini: {
@@ -256,17 +259,15 @@ const generateQuestions = async () => {
 
         // --- STEP 1: PDF EXTRACTION (Gemini Vision) ---
         if (pdfFile.value) {
-            processingStage.value = "Gemini Vision: Scanning PDF..."; // KEREN 1
+            processingStage.value = "Gemini Vision: Scanning PDF...";
             try {
                 filePart = await fileToGenerativePart(pdfFile.value);
 
-                // Jika provider BUKAN Gemini, lakukan estafet
                 if (currentProvider.value !== "gemini") {
                     const extractionPrompt = `
                         TASK: Extract all educational text from this PDF.
                         OUTPUT: Pure text only. No commentary.
                     `;
-                    // Relay: Gemini reads -> Text
                     extractedText = await tryProviderWithRotation(
                         "gemini",
                         extractionPrompt,
@@ -277,7 +278,7 @@ const generateQuestions = async () => {
                             providers[currentProvider.value].name,
                         "success",
                     );
-                    filePart = null; // Clear file, now we use text
+                    filePart = null;
                 }
             } catch (e) {
                 throw new Error("PDF Processing Failed: " + e.message);
@@ -285,7 +286,27 @@ const generateQuestions = async () => {
         }
 
         // --- STEP 2: CONTENT GENERATION (Selected Provider) ---
-        processingStage.value = `${providers[currentProvider.value].name} Engine: Generating...`; // KEREN 2
+        processingStage.value = `${providers[currentProvider.value].name} Engine: Generating...`;
+
+        // UPDATE: DYNAMIC CONSTRAINT BASED ON MODE
+        let constraintInstruction = "";
+        if (generationMode.value === "hard") {
+            // STRICT MODE (Hard)
+            constraintInstruction = `
+            CRITICAL CONSTRAINTS (STRICT MODE):
+            - Questions and Answers must be derived 100% ONLY from the source material provided.
+            - Do NOT add external facts, even if they are correct.
+            - If the information is not in the source, do not ask about it.
+            `;
+        } else {
+            // SMART MODE (Soft)
+            constraintInstruction = `
+            CREATIVE GUIDELINES (SMART MODE):
+            - Use the source material as the primary foundation.
+            - You are ENCOURAGED to use your internal knowledge to explain concepts more clearly if the source is too brief.
+            - Add relevant context, examples, or analogies to make the answer educational and easy to understand.
+            `;
+        }
 
         const finalPrompt = `
             ACT AS: Expert Professor.
@@ -298,7 +319,8 @@ const generateQuestions = async () => {
             TASK 2 (CONTENT GENERATION):
             Study the provided material carefully.
             Create ${questionCount.value} Flashcard Questions (Multiple Choice/Short Answer).
-            Ensure the answer (a) is comprehensive and educational.
+
+            ${constraintInstruction}
 
             OUTPUT FORMAT (Strict JSON Array):
             [{"id":1, "tag":"[AI_GENERATED_TAG]", "icon":"Brain", "q":"Question?", "a":"Answer."}]
@@ -328,7 +350,7 @@ const generateQuestions = async () => {
                 tag: item.tag || subjectTitle.value,
             }));
             addToast(
-                `Success! ${generatedQuestions.value.length} items generated.`,
+                `Success! ${generatedQuestions.value.length} items generated (${generationMode.value === "hard" ? "Strict" : "Smart"} Mode).`,
                 "success",
             );
         } else {
@@ -774,6 +796,48 @@ const formatDate = (timestamp) => {
                                     /><Wand2 v-else class="w-5 h-5" />
                                 </button>
                             </div>
+                        </div>
+
+                        <div>
+                            <label
+                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 block ml-1"
+                                >Generation Mode</label
+                            >
+                            <div
+                                class="grid grid-cols-2 gap-2 p-1 bg-cozy-bg rounded-xl border border-cozy-border"
+                            >
+                                <button
+                                    @click="generationMode = 'hard'"
+                                    class="flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all"
+                                    :class="
+                                        generationMode === 'hard'
+                                            ? 'bg-white shadow-sm text-cozy-text ring-1 ring-cozy-border'
+                                            : 'text-cozy-muted hover:text-cozy-text'
+                                    "
+                                >
+                                    <Lock class="w-3 h-3" /> Strict
+                                </button>
+                                <button
+                                    @click="generationMode = 'soft'"
+                                    class="flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all"
+                                    :class="
+                                        generationMode === 'soft'
+                                            ? 'bg-white shadow-sm text-cozy-primary ring-1 ring-cozy-border'
+                                            : 'text-cozy-muted hover:text-cozy-text'
+                                    "
+                                >
+                                    <Globe class="w-3 h-3" /> Smart
+                                </button>
+                            </div>
+                            <p
+                                class="text-[9px] text-cozy-muted mt-1.5 ml-1 leading-tight"
+                            >
+                                {{
+                                    generationMode === "hard"
+                                        ? "🔒 Strict: 100% based on PDF. No outside facts."
+                                        : "✨ Smart: Uses PDF + AI Knowledge for better context."
+                                }}
+                            </p>
                         </div>
 
                         <div class="space-y-2">
