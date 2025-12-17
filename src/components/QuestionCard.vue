@@ -30,6 +30,7 @@ import {
     Eye,
     Target,
     EyeOff,
+    ChevronDown,
 } from "lucide-vue-next";
 
 const props = defineProps({ item: Object, isRevealed: Boolean });
@@ -94,13 +95,23 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
 
 <template>
     <div
-        class="group relative bg-cozy-card rounded-[24px] p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-cozy-primary/5 border border-transparent hover:border-cozy-border cursor-pointer active:scale-[0.99] flex flex-col overflow-hidden"
+        class="group relative rounded-[24px] p-6 cursor-pointer border transition-all duration-300 flex flex-col overflow-hidden bg-cozy-card shadow-sm"
+        :class="[
+            isRevealed
+                ? 'bg-white border-cozy-primary/40 shadow-lg ring-1 ring-cozy-primary/10'
+                : 'border-transparent hover:border-cozy-border hover:shadow-md',
+        ]"
         @click="toggleCard"
     >
-        <div class="flex justify-between items-start mb-4 relative z-10">
+        <div class="flex justify-between items-start mb-3 relative z-10">
             <div class="flex items-start gap-3 max-w-[80%]">
                 <div
-                    class="w-10 h-10 shrink-0 rounded-xl bg-cozy-bg flex items-center justify-center text-cozy-primary group-hover:bg-cozy-primary group-hover:text-white transition-colors duration-500 shadow-sm mt-0.5"
+                    class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center transition-colors duration-300 shadow-sm mt-0.5"
+                    :class="
+                        isRevealed
+                            ? 'bg-cozy-primary text-white'
+                            : 'bg-cozy-bg text-cozy-primary group-hover:bg-cozy-primary group-hover:text-white'
+                    "
                 >
                     <component
                         :is="iconMap[item.icon] || Brain"
@@ -110,10 +121,18 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
                 </div>
 
                 <div
-                    class="px-2.5 py-1.5 bg-cozy-bg rounded-lg border border-cozy-border/50 h-auto w-full"
+                    class="px-2.5 py-1.5 bg-cozy-bg rounded-lg border border-cozy-border/50 h-auto w-full transition-colors duration-300"
+                    :class="
+                        isRevealed
+                            ? 'bg-cozy-primary/5 border-cozy-primary/20'
+                            : ''
+                    "
                 >
                     <p
-                        class="text-[10px] font-bold text-cozy-muted uppercase tracking-wider leading-snug break-words whitespace-normal text-left"
+                        class="text-[10px] font-bold uppercase tracking-wider leading-snug break-words whitespace-normal text-left transition-colors"
+                        :class="
+                            isRevealed ? 'text-cozy-primary' : 'text-cozy-muted'
+                        "
                     >
                         {{ item.tag }}
                     </p>
@@ -121,7 +140,12 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
             </div>
 
             <div
-                class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300 shrink-0"
+                class="flex gap-1 transition-opacity duration-300 shrink-0"
+                :class="
+                    isRevealed
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100'
+                "
             >
                 <button
                     @click="askGemini"
@@ -148,13 +172,15 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
         </div>
 
         <div
-            class="flex-1 flex flex-col justify-center transition-all duration-500"
-            :class="isRevealed ? 'mb-4' : 'mb-8 py-4'"
+            class="flex-1 flex flex-col justify-center transition-all duration-300"
+            :class="isRevealed ? 'mb-4' : 'mb-6 py-2'"
         >
             <h3
-                class="font-display font-bold text-cozy-text leading-snug group-hover:text-cozy-primary transition-colors text-center"
+                class="font-display font-bold text-cozy-text leading-snug transition-all duration-300"
                 :class="
-                    isRevealed ? 'text-lg text-left' : 'text-xl md:text-2xl'
+                    isRevealed
+                        ? 'text-lg text-left'
+                        : 'text-lg md:text-xl text-center'
                 "
             >
                 {{ item.q }}
@@ -162,7 +188,7 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
         </div>
 
         <div
-            class="grid transition-[grid-template-rows] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
+            class="grid transition-[grid-template-rows] duration-300 ease-out"
             :class="isRevealed ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'"
         >
             <div class="overflow-hidden">
@@ -170,7 +196,7 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
                     class="pt-4 border-t border-dashed border-cozy-border relative"
                 >
                     <div
-                        class="prose-content text-cozy-text text-base leading-relaxed"
+                        class="prose-content text-cozy-text text-sm md:text-base leading-relaxed"
                         v-html="parsedAnswer"
                     ></div>
                     <div class="flex justify-end mt-4">
@@ -185,22 +211,36 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
             </div>
         </div>
 
-        <div v-if="!isRevealed" class="mt-auto flex justify-center">
+        <div class="mt-auto relative h-6 flex justify-center items-center">
             <div
-                class="flex items-center gap-2 px-4 py-2 rounded-full bg-cozy-bg/50 border border-cozy-border/50 text-xs font-bold text-cozy-muted group-hover:text-cozy-primary group-hover:border-cozy-primary/30 transition-all"
+                class="absolute transition-all duration-300 flex items-center gap-2"
+                :class="
+                    isRevealed
+                        ? 'opacity-0 translate-y-2'
+                        : 'opacity-100 translate-y-0'
+                "
             >
-                <Eye class="w-4 h-4" />
-                <span>Ketuk untuk lihat jawaban</span>
+                <div
+                    class="px-3 py-1 rounded-full bg-cozy-bg/50 border border-cozy-border/50 text-[10px] font-bold text-cozy-muted group-hover:text-cozy-primary group-hover:border-cozy-primary/30 transition-all flex items-center gap-1.5"
+                >
+                    <span>Lihat Jawaban</span>
+                    <ChevronDown class="w-3 h-3 opacity-50" />
+                </div>
             </div>
-        </div>
-        <div
-            v-else
-            class="mt-auto pt-2 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-500 delay-300"
-        >
+
             <div
-                class="flex items-center gap-2 text-[10px] font-bold text-cozy-muted/50 uppercase tracking-widest"
+                class="absolute transition-all duration-300 flex items-center gap-2"
+                :class="
+                    isRevealed
+                        ? 'opacity-50 hover:opacity-100 translate-y-0'
+                        : 'opacity-0 -translate-y-2'
+                "
             >
-                <EyeOff class="w-3 h-3" /> Tutup Kartu
+                <div
+                    class="flex items-center gap-2 text-[10px] font-bold text-cozy-muted/70 hover:text-cozy-text uppercase tracking-widest cursor-pointer"
+                >
+                    <EyeOff class="w-3 h-3" /> Tutup
+                </div>
             </div>
         </div>
     </div>
