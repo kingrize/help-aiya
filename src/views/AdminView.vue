@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { ref, nextTick, watch, onMounted } from "vue"; // Tambah watch
 import { useRouter } from "vue-router";
 import { auth, db } from "../firebase";
 import { signOut } from "firebase/auth";
@@ -37,6 +37,8 @@ import {
     Workflow,
     Lock,
     Globe,
+    Pencil,
+    RefreshCw,
 } from "lucide-vue-next";
 import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
@@ -44,6 +46,8 @@ import { useToast } from "../composables/useToast";
 
 const router = useRouter();
 const { addToast } = useToast();
+
+const DRAFT_KEY = "aiya_admin_draft_v1"; // Key untuk LocalStorage
 
 // --- STATE UI ---
 const isLoading = ref(false);
@@ -57,6 +61,12 @@ const isLoadingMaterials = ref(false);
 const pdfFile = ref(null);
 const pdfFileName = ref("");
 const processingStage = ref("");
+const previewSection = ref(null);
+const isDragging = ref(false);
+
+// --- EDIT STATE ---
+const editingIndex = ref(null);
+const tempEditData = ref({});
 
 // --- AI CONFIG ---
 const currentProvider = ref("gemini");
@@ -64,7 +74,7 @@ const selectedKeyIndex = ref(1);
 const questionCount = ref(5);
 const isAutoKey = ref(true);
 const isAutoModel = ref(true);
-const generationMode = ref("hard"); // 'hard' (Strict) or 'soft' (Smart/Expanded)
+const generationMode = ref("hard");
 
 const providers = {
     gemini: {
@@ -106,9 +116,90 @@ const subjectTitle = ref("");
 const rawMaterial = ref("");
 const generatedQuestions = ref([]);
 
+// --- AUTO-SAVE & RESTORE DRAFT LOGIC ---
+
+// 1. Restore saat komponen dipasang (Refresh/Buka Ulang)
+onMounted(() => {
+    const savedDraft = localStorage.getItem(DRAFT_KEY);
+    if (savedDraft) {
+        try {
+            const parsed = JSON.parse(savedDraft);
+            // Hanya restore jika ada isinya
+            if (
+                parsed.title ||
+                parsed.material ||
+                (parsed.questions && parsed.questions.length > 0)
+            ) {
+                subjectTitle.value = parsed.title || "";
+                rawMaterial.value = parsed.material || "";
+                generatedQuestions.value = parsed.questions || [];
+
+                if (generatedQuestions.value.length > 0) {
+                    addToast("Draft sebelumnya dipulihkan! 📂", "info");
+                    // Auto scroll ke preview jika ada soal
+                    nextTick(() => {
+                        if (previewSection.value)
+                            previewSection.value.scrollIntoView({
+                                behavior: "smooth",
+                            });
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("Gagal restore draft:", e);
+            localStorage.removeItem(DRAFT_KEY);
+        }
+    }
+});
+
+// 2. Watcher untuk Auto-Save setiap ada perubahan
+watch(
+    [subjectTitle, rawMaterial, generatedQuestions],
+    () => {
+        // Jangan simpan jika kosong semua agar storage bersih
+        if (
+            !subjectTitle.value &&
+            !rawMaterial.value &&
+            generatedQuestions.value.length === 0
+        ) {
+            return;
+        }
+
+        const draftData = {
+            title: subjectTitle.value,
+            material: rawMaterial.value,
+            questions: generatedQuestions.value,
+        };
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(draftData));
+    },
+    { deep: true },
+);
+
+// 3. Fungsi hapus draft (dipanggil saat sukses simpan ke DB atau Reset)
+const clearDraft = () => {
+    localStorage.removeItem(DRAFT_KEY);
+};
+
 // --- HELPER: FILE TO BASE64 ---
 const handleFileUpload = (event) => {
-    const file = event.target.files[0];
+    processFile(event.target.files[0]);
+};
+
+const onDragOver = (e) => {
+    e.preventDefault();
+    isDragging.value = true;
+};
+const onDragLeave = (e) => {
+    e.preventDefault();
+    isDragging.value = false;
+};
+const onDrop = (e) => {
+    e.preventDefault();
+    isDragging.value = false;
+    processFile(e.dataTransfer.files[0]);
+};
+
+const processFile = (file) => {
     if (file) {
         if (file.type !== "application/pdf") {
             addToast("Unsupported file type. PDF only.", "error");
@@ -121,6 +212,7 @@ const handleFileUpload = (event) => {
                 .replace(/\.pdf$/i, "")
                 .replace(/[-_]/g, " ");
         }
+        addToast("PDF Ready to Scan!", "success");
     }
 };
 
@@ -288,23 +380,20 @@ const generateQuestions = async () => {
         // --- STEP 2: CONTENT GENERATION (Selected Provider) ---
         processingStage.value = `${providers[currentProvider.value].name} Engine: Generating...`;
 
-        // UPDATE: DYNAMIC CONSTRAINT BASED ON MODE
+        // DYNAMIC CONSTRAINT
         let constraintInstruction = "";
         if (generationMode.value === "hard") {
-            // STRICT MODE (Hard)
             constraintInstruction = `
             CRITICAL CONSTRAINTS (STRICT MODE):
             - Questions and Answers must be derived 100% ONLY from the source material provided.
             - Do NOT add external facts, even if they are correct.
-            - If the information is not in the source, do not ask about it.
             `;
         } else {
-            // SMART MODE (Soft)
             constraintInstruction = `
             CREATIVE GUIDELINES (SMART MODE):
             - Use the source material as the primary foundation.
-            - You are ENCOURAGED to use your internal knowledge to explain concepts more clearly if the source is too brief.
-            - Add relevant context, examples, or analogies to make the answer educational and easy to understand.
+            - You are ENCOURAGED to use your internal knowledge to explain concepts more clearly.
+            - Add relevant context, examples, or analogies.
             `;
         }
 
@@ -336,7 +425,6 @@ const generateQuestions = async () => {
             filePart,
         );
 
-        // Clean & Parse
         result = result.replace(/```json|```/g, "").trim();
         const firstBracket = result.indexOf("[");
         const lastBracket = result.lastIndexOf("]");
@@ -353,6 +441,14 @@ const generateQuestions = async () => {
                 `Success! ${generatedQuestions.value.length} items generated (${generationMode.value === "hard" ? "Strict" : "Smart"} Mode).`,
                 "success",
             );
+
+            await nextTick();
+            if (previewSection.value) {
+                previewSection.value.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                });
+            }
         } else {
             throw new Error("Invalid JSON response from AI.");
         }
@@ -363,6 +459,25 @@ const generateQuestions = async () => {
         isLoading.value = false;
         processingStage.value = "";
     }
+};
+
+// --- EDITING LOGIC ---
+const startEdit = (index) => {
+    editingIndex.value = index;
+    tempEditData.value = JSON.parse(
+        JSON.stringify(generatedQuestions.value[index]),
+    );
+};
+
+const saveEdit = (index) => {
+    generatedQuestions.value[index] = { ...tempEditData.value };
+    editingIndex.value = null;
+    addToast("Changes saved!", "success");
+};
+
+const cancelEdit = () => {
+    editingIndex.value = null;
+    tempEditData.value = {};
 };
 
 const generateMaterialFromTitle = async () => {
@@ -393,6 +508,8 @@ const saveToDatabase = async () => {
             questionsList: generatedQuestions.value,
         });
         addToast("Saved to Database! 🎉", "success");
+
+        // Hapus Data & Bersihkan Draft
         subjectTitle.value = "";
         rawMaterial.value = "";
         generatedQuestions.value = [];
@@ -400,6 +517,8 @@ const saveToDatabase = async () => {
         pdfFileName.value = "";
         const fileInput = document.getElementById("pdf-upload");
         if (fileInput) fileInput.value = "";
+
+        clearDraft(); // Hapus draft karena sudah tersimpan aman di DB
     } catch (error) {
         addToast("Save Failed: " + error.message, "error");
     } finally {
@@ -422,6 +541,7 @@ const confirmResetAction = async () => {
         await Promise.all(
             querySnapshot.docs.map((d) => deleteDoc(doc(db, "courses", d.id))),
         );
+        clearDraft(); // Reset DB juga menghapus draft
         addToast("Database Reset Successful.", "success");
     } catch (e) {
         addToast("Reset Failed: " + e.message, "error");
@@ -853,7 +973,12 @@ const formatDate = (timestamp) => {
                                 >
                             </div>
 
-                            <div class="relative group">
+                            <div
+                                class="relative group"
+                                @dragover="onDragOver"
+                                @dragleave="onDragLeave"
+                                @drop="onDrop"
+                            >
                                 <input
                                     type="file"
                                     id="pdf-upload"
@@ -861,25 +986,38 @@ const formatDate = (timestamp) => {
                                     @change="handleFileUpload"
                                     class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                                 />
+
                                 <div
-                                    class="w-full p-4 border-2 border-dashed rounded-xl transition-all flex flex-col items-center justify-center gap-2 text-center"
-                                    :class="
+                                    class="w-full p-4 border-2 border-dashed rounded-xl transition-all duration-300 flex flex-col items-center justify-center gap-2 text-center"
+                                    :class="[
+                                        isDragging
+                                            ? 'border-cozy-primary bg-cozy-primary/10 scale-[1.02]'
+                                            : 'border-cozy-border bg-cozy-bg',
                                         pdfFile
                                             ? 'bg-green-50/50 border-green-200'
-                                            : 'bg-cozy-bg border-cozy-border group-hover:border-cozy-primary/50'
-                                    "
+                                            : 'group-hover:border-cozy-primary/50',
+                                    ]"
                                 >
                                     <div
                                         v-if="!pdfFile"
                                         class="text-cozy-muted group-hover:text-cozy-primary transition-colors flex flex-col items-center"
                                     >
-                                        <UploadCloud class="w-6 h-6 mb-1" />
-                                        <span class="text-xs font-bold"
-                                            >Upload Lecture PDF</span
-                                        >
-                                        <span class="text-[9px] opacity-70"
-                                            >Click or drag file here</span
-                                        >
+                                        <UploadCloud
+                                            class="w-6 h-6 mb-1"
+                                            :class="{
+                                                'animate-bounce': isDragging,
+                                            }"
+                                        />
+                                        <span class="text-xs font-bold">{{
+                                            isDragging
+                                                ? "Drop PDF Here!"
+                                                : "Upload Lecture PDF"
+                                        }}</span>
+                                        <span class="text-[9px] opacity-70">{{
+                                            isDragging
+                                                ? "Release to upload..."
+                                                : "Click or drag file here"
+                                        }}</span>
                                     </div>
                                     <div
                                         v-else
@@ -960,7 +1098,7 @@ const formatDate = (timestamp) => {
                 </div>
             </div>
 
-            <div class="lg:col-span-8">
+            <div class="lg:col-span-8" ref="previewSection">
                 <div class="flex justify-between items-center mb-4 px-2">
                     <h3
                         class="text-sm font-bold text-cozy-muted uppercase tracking-widest flex items-center gap-2"
@@ -980,6 +1118,7 @@ const formatDate = (timestamp) => {
                         {{ isSaving ? "Saving..." : "Save All" }}
                     </button>
                 </div>
+
                 <div
                     v-if="generatedQuestions.length === 0"
                     class="h-[600px] flex flex-col items-center justify-center text-center border-2 border-dashed border-cozy-border rounded-[32px] bg-cozy-bg/30"
@@ -996,23 +1135,80 @@ const formatDate = (timestamp) => {
                         Upload a PDF or paste text, then hit Generate.
                     </p>
                 </div>
+
                 <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4 pb-12">
                     <div
                         v-for="(card, index) in generatedQuestions"
                         :key="index"
                         class="relative group"
                     >
-                        <button
-                            @click="removeDraft(index)"
-                            class="absolute -top-2 -right-2 z-10 p-2 bg-white text-red-400 rounded-full shadow-md hover:bg-red-500 hover:text-white opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all duration-300"
+                        <div
+                            v-if="editingIndex === index"
+                            class="bg-cozy-card border-2 border-cozy-primary/50 p-4 rounded-[24px] shadow-lg flex flex-col gap-3 animate-in zoom-in-95 h-full"
                         >
-                            <Trash2 class="w-4 h-4" />
-                        </button>
-                        <QuestionCard
-                            :item="card"
-                            :isRevealed="true"
-                            class="h-full"
-                        />
+                            <div class="flex justify-between items-center mb-1">
+                                <span
+                                    class="text-[10px] font-bold text-cozy-primary uppercase tracking-wider"
+                                    >Editing Card #{{ index + 1 }}</span
+                                >
+                                <div class="flex gap-1">
+                                    <button
+                                        @click="saveEdit(index)"
+                                        class="p-1.5 bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors"
+                                    >
+                                        <Check class="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        @click="cancelEdit"
+                                        class="p-1.5 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
+                                    >
+                                        <X class="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            <input
+                                v-model="tempEditData.tag"
+                                type="text"
+                                class="w-full p-2 bg-cozy-bg border border-cozy-border rounded-xl text-xs font-bold text-cozy-muted focus:border-cozy-primary outline-none"
+                                placeholder="Tag..."
+                            />
+                            <input
+                                v-model="tempEditData.q"
+                                type="text"
+                                class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none"
+                                placeholder="Question..."
+                            />
+                            <textarea
+                                v-model="tempEditData.a"
+                                rows="4"
+                                class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm text-cozy-text focus:border-cozy-primary outline-none resize-none"
+                                placeholder="Answer..."
+                            ></textarea>
+                        </div>
+
+                        <div v-else class="h-full relative">
+                            <div
+                                class="absolute -top-2 -right-2 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                            >
+                                <button
+                                    @click="startEdit(index)"
+                                    class="p-2 bg-white text-cozy-primary border border-cozy-border rounded-full shadow-md hover:bg-cozy-primary hover:text-white transition-all scale-75 group-hover:scale-100"
+                                >
+                                    <Pencil class="w-4 h-4" />
+                                </button>
+                                <button
+                                    @click="removeDraft(index)"
+                                    class="p-2 bg-white text-red-400 border border-cozy-border rounded-full shadow-md hover:bg-red-500 hover:text-white transition-all scale-75 group-hover:scale-100"
+                                >
+                                    <Trash2 class="w-4 h-4" />
+                                </button>
+                            </div>
+                            <QuestionCard
+                                :item="card"
+                                :isRevealed="true"
+                                class="h-full"
+                            />
+                        </div>
                     </div>
                 </div>
 
