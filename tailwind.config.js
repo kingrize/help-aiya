@@ -1,29 +1,35 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{vue,js,ts,jsx,tsx}"],
+  // HAPUS darkMode: 'class', kita tidak pakai lagi
   theme: {
+    fontFamily: {
+      sans: ["Quicksand", "sans-serif"],
+      display: ["Baloo 2", "cursive"],
+    },
     extend: {
-      fontFamily: {
-        sans: ["Nunito", "sans-serif"],
-        display: ["Quicksand", "sans-serif"],
-      },
       colors: {
+        // Kita petakan ke Variable CSS
         cozy: {
-          bg: "var(--c-bg)",
-          card: "var(--c-card)",
-          text: "var(--c-text)",
-          muted: "var(--c-text-muted)",
-          primary: "var(--c-primary)",
-          secondary: "var(--c-secondary)",
-          accent: "var(--c-accent)",
-          border: "var(--c-border)",
-          // 👇 TAMBAHAN BARU
-          "user-bg": "var(--c-user-bg)",
-          "user-text": "var(--c-user-text)",
+          bg: "var(--c-bg)", // Latar belakang utama
+          card: "var(--c-card)", // Latar kartu/elemen
+          text: "var(--c-text)", // Warna teks utama
+          muted: "var(--c-muted)", // Warna teks pudar
+          border: "var(--c-border)", // Garis pinggir
+          primary: "var(--c-primary)", // Warna Utama (Pink/Biru/dll)
+          accent: "var(--c-accent)", // Warna kedua
+          shadow: "var(--c-shadow)", // Bayangan
         },
       },
-      boxShadow: {
-        soft: "0 10px 40px -10px rgba(0, 0, 0, 0.08)",
+      animation: {
+        wiggle: "wiggle 1s ease-in-out infinite",
+        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+      },
+      keyframes: {
+        wiggle: {
+          "0%, 100%": { transform: "rotate(-3deg)" },
+          "50%": { transform: "rotate(3deg)" },
+        },
       },
     },
   },

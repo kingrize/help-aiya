@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
-import { Sparkles } from "lucide-vue-next";
+import { BrainCircuit } from "lucide-vue-next"; // Logo Icon
+import ThemeToggle from "./ThemeToggle.vue";
 
 const greeting = computed(() => {
     const h = new Date().getHours();
@@ -12,32 +13,52 @@ const greeting = computed(() => {
 </script>
 
 <template>
-    <header class="pt-16 pb-8 px-6 md:px-12 max-w-6xl mx-auto">
-        <div class="flex flex-col gap-3 animate-fade-in-down">
-            <div
-                class="flex items-center gap-2 text-cozy-primary font-bold text-xs tracking-[0.2em] uppercase opacity-80"
-            >
-                <span class="w-8 h-[1px] bg-cozy-primary"></span>
-                <span>Ruang Belajar Aiya</span>
+    <div class="w-full bg-cozy-bg transition-colors duration-500">
+        <div
+            class="px-6 md:px-12 pt-6 flex justify-between items-center max-w-6xl mx-auto"
+        >
+            <div class="flex items-center gap-2">
+                <div
+                    class="w-8 h-8 bg-cozy-primary/10 rounded-xl flex items-center justify-center text-cozy-primary"
+                >
+                    <BrainCircuit class="w-5 h-5" />
+                </div>
+                <span
+                    class="font-display font-bold text-lg text-cozy-text tracking-tight"
+                    >Aiya.</span
+                >
             </div>
 
-            <h1
-                class="font-display text-4xl md:text-6xl font-bold text-cozy-text leading-[1.1] tracking-tight"
-            >
-                {{ greeting }},<br />
-                <span class="text-cozy-muted opacity-50"
-                    >Siap Review Materi?</span
-                >
-            </h1>
-
-            <p
-                class="text-cozy-muted text-sm md:text-base max-w-lg leading-relaxed mt-4 border-l-2 border-cozy-primary/30 pl-4"
-            >
-                Kumpulan catatan ringkas Psikologi untuk persiapan ujian lisan.
-                Santai saja, pelajari satu per satu ya! 🌱
-            </p>
+            <ThemeToggle />
         </div>
-    </header>
+
+        <header class="pt-10 pb-8 px-6 md:px-12 max-w-6xl mx-auto">
+            <div class="flex flex-col gap-3 animate-fade-in-down">
+                <div
+                    class="flex items-center gap-2 text-cozy-primary font-bold text-xs tracking-[0.2em] uppercase opacity-80"
+                >
+                    <span class="w-8 h-[1px] bg-cozy-primary"></span>
+                    <span>Ruang Belajar Aiya</span>
+                </div>
+
+                <h1
+                    class="font-display text-4xl md:text-6xl font-bold text-cozy-text leading-[1.1] tracking-tight"
+                >
+                    {{ greeting }},<br />
+                    <span class="text-cozy-muted opacity-50 font-medium"
+                        >Siap Review Materi?</span
+                    >
+                </h1>
+
+                <p
+                    class="text-cozy-muted text-sm md:text-base max-w-lg leading-relaxed mt-4 border-l-2 border-cozy-primary/30 pl-4"
+                >
+                    Kumpulan catatan ringkas Psikologi untuk persiapan ujian
+                    lisan. Santai saja, pelajari satu per satu ya! 🌱
+                </p>
+            </div>
+        </header>
+    </div>
 </template>
 
 <style scoped>
