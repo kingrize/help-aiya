@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick, watch, onMounted } from "vue"; // Tambah watch
+import { ref, nextTick, watch, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { auth, db } from "../firebase";
 import { signOut } from "firebase/auth";
@@ -38,7 +38,8 @@ import {
     Lock,
     Globe,
     Pencil,
-    RefreshCw,
+    Home,
+    AlertTriangle,
 } from "lucide-vue-next";
 import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
@@ -47,7 +48,7 @@ import { useToast } from "../composables/useToast";
 const router = useRouter();
 const { addToast } = useToast();
 
-const DRAFT_KEY = "aiya_admin_draft_v1"; // Key untuk LocalStorage
+const DRAFT_KEY = "aiya_admin_draft_v2";
 
 // --- STATE UI ---
 const isLoading = ref(false);
@@ -80,13 +81,13 @@ const providers = {
     gemini: {
         name: "Gemini 2.5",
         icon: Sparkles,
-        desc: "Multimodal (Vision & Text)",
+        desc: "Multimodal (Vision)",
         maxKeys: 10,
     },
     groq: {
         name: "Groq Llama 3",
         icon: Zap,
-        desc: "High-Speed Inference",
+        desc: "Ultra Fast Inference",
         maxKeys: 5,
     },
     aiml: {
@@ -116,15 +117,12 @@ const subjectTitle = ref("");
 const rawMaterial = ref("");
 const generatedQuestions = ref([]);
 
-// --- AUTO-SAVE & RESTORE DRAFT LOGIC ---
-
-// 1. Restore saat komponen dipasang (Refresh/Buka Ulang)
+// --- AUTO-SAVE & RESTORE ---
 onMounted(() => {
     const savedDraft = localStorage.getItem(DRAFT_KEY);
     if (savedDraft) {
         try {
             const parsed = JSON.parse(savedDraft);
-            // Hanya restore jika ada isinya
             if (
                 parsed.title ||
                 parsed.material ||
@@ -135,8 +133,7 @@ onMounted(() => {
                 generatedQuestions.value = parsed.questions || [];
 
                 if (generatedQuestions.value.length > 0) {
-                    addToast("Draft sebelumnya dipulihkan! 📂", "info");
-                    // Auto scroll ke preview jika ada soal
+                    addToast("Draft Restored! 📂", "info");
                     nextTick(() => {
                         if (previewSection.value)
                             previewSection.value.scrollIntoView({
@@ -146,25 +143,20 @@ onMounted(() => {
                 }
             }
         } catch (e) {
-            console.error("Gagal restore draft:", e);
             localStorage.removeItem(DRAFT_KEY);
         }
     }
 });
 
-// 2. Watcher untuk Auto-Save setiap ada perubahan
 watch(
     [subjectTitle, rawMaterial, generatedQuestions],
     () => {
-        // Jangan simpan jika kosong semua agar storage bersih
         if (
             !subjectTitle.value &&
             !rawMaterial.value &&
             generatedQuestions.value.length === 0
-        ) {
+        )
             return;
-        }
-
         const draftData = {
             title: subjectTitle.value,
             material: rawMaterial.value,
@@ -175,16 +167,14 @@ watch(
     { deep: true },
 );
 
-// 3. Fungsi hapus draft (dipanggil saat sukses simpan ke DB atau Reset)
 const clearDraft = () => {
     localStorage.removeItem(DRAFT_KEY);
 };
 
-// --- HELPER: FILE TO BASE64 ---
+// --- HELPER: FILE ---
 const handleFileUpload = (event) => {
     processFile(event.target.files[0]);
 };
-
 const onDragOver = (e) => {
     e.preventDefault();
     isDragging.value = true;
@@ -202,7 +192,7 @@ const onDrop = (e) => {
 const processFile = (file) => {
     if (file) {
         if (file.type !== "application/pdf") {
-            addToast("Unsupported file type. PDF only.", "error");
+            addToast("PDF Only!", "error");
             return;
         }
         pdfFile.value = file;
@@ -212,7 +202,7 @@ const processFile = (file) => {
                 .replace(/\.pdf$/i, "")
                 .replace(/[-_]/g, " ");
         }
-        addToast("PDF Ready to Scan!", "success");
+        addToast("PDF Ready!", "success");
     }
 };
 
@@ -240,7 +230,6 @@ const callProviderApi = async (
     if (providerName === "gemini") {
         const parts = [{ text: prompt }];
         if (filePart) parts.push(filePart);
-
         const res = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
             {
@@ -250,11 +239,10 @@ const callProviderApi = async (
             },
         );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Gemini API Error");
+        if (!res.ok) throw new Error(data.error?.message || "Gemini Error");
         return data.candidates?.[0]?.content?.parts?.[0]?.text;
     } else if (providerName === "groq") {
-        if (filePart)
-            throw new Error("Groq does not support Direct File Upload.");
+        if (filePart) throw new Error("Groq doesn't support PDF.");
         const res = await fetch(
             "https://api.groq.com/openai/v1/chat/completions",
             {
@@ -270,11 +258,10 @@ const callProviderApi = async (
             },
         );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Groq API Error");
+        if (!res.ok) throw new Error(data.error?.message || "Groq Error");
         return data.choices?.[0]?.message?.content;
     } else if (providerName === "aiml") {
-        if (filePart)
-            throw new Error("AIML does not support Direct File Upload.");
+        if (filePart) throw new Error("AIML doesn't support PDF.");
         const res = await fetch("https://api.aimlapi.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -288,12 +275,11 @@ const callProviderApi = async (
             }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "AIML API Error");
+        if (!res.ok) throw new Error(data.error?.message || "AIML Error");
         return data.choices?.[0]?.message?.content;
     }
 };
 
-// --- HELPER: KEY ROTATION ---
 const tryProviderWithRotation = async (
     providerName,
     prompt,
@@ -301,7 +287,6 @@ const tryProviderWithRotation = async (
 ) => {
     let keysToTry = [];
     const max = providers[providerName].maxKeys;
-
     if (isAutoKey.value) {
         for (let i = 1; i <= max; i++)
             if (apiKeys[providerName][i])
@@ -314,12 +299,8 @@ const tryProviderWithRotation = async (
                 if (apiKeys[providerName][i])
                     keysToTry.push(apiKeys[providerName][i]);
     }
-
     if (keysToTry.length === 0)
-        throw new Error(
-            `No API Keys configured for ${providers[providerName].name}`,
-        );
-
+        throw new Error(`No API Keys for ${providerName}`);
     for (const apiKey of keysToTry) {
         try {
             const result = await callProviderApi(
@@ -330,18 +311,16 @@ const tryProviderWithRotation = async (
             );
             if (result) return result;
         } catch (err) {
-            console.warn(`[${providerName}] Key Error, rotating...`);
+            console.warn(`[${providerName}] Key failed, rotating...`);
         }
     }
     throw new Error(`All keys exhausted for ${providerName}.`);
 };
 
-// --- CORE LOGIC: AI RELAY PIPELINE ---
+// --- CORE LOGIC ---
 const generateQuestions = async () => {
-    if (!subjectTitle.value || (!rawMaterial.value && !pdfFile.value)) {
-        return addToast("Missing Title or Source Material!", "error");
-    }
-
+    if (!subjectTitle.value || (!rawMaterial.value && !pdfFile.value))
+        return addToast("Input Data Missing!", "error");
     isLoading.value = true;
     generatedQuestions.value = [];
 
@@ -349,17 +328,14 @@ const generateQuestions = async () => {
         let extractedText = rawMaterial.value;
         let filePart = null;
 
-        // --- STEP 1: PDF EXTRACTION (Gemini Vision) ---
+        // 1. SCAN PDF (Jika ada)
         if (pdfFile.value) {
-            processingStage.value = "Gemini Vision: Scanning PDF...";
+            processingStage.value = "Gemini Vision: Analyzing PDF...";
             try {
                 filePart = await fileToGenerativePart(pdfFile.value);
-
                 if (currentProvider.value !== "gemini") {
-                    const extractionPrompt = `
-                        TASK: Extract all educational text from this PDF.
-                        OUTPUT: Pure text only. No commentary.
-                    `;
+                    // Jika pakai Groq, estafet dulu ke Gemini buat baca teksnya
+                    const extractionPrompt = `TUGAS: Ekstrak seluruh teks materi kuliah dari PDF ini. OUTPUT: Hanya teks mentah.`;
                     extractedText = await tryProviderWithRotation(
                         "gemini",
                         extractionPrompt,
@@ -373,50 +349,65 @@ const generateQuestions = async () => {
                     filePart = null;
                 }
             } catch (e) {
-                throw new Error("PDF Processing Failed: " + e.message);
+                throw new Error("PDF Read Failed: " + e.message);
             }
         }
 
-        // --- STEP 2: CONTENT GENERATION (Selected Provider) ---
-        processingStage.value = `${providers[currentProvider.value].name} Engine: Generating...`;
+        // 2. GENERATE SOAL (PROMPT BAHASA INDONESIA)
+        processingStage.value = `${providers[currentProvider.value].name}: Thinking Process...`;
 
-        // DYNAMIC CONSTRAINT
-        let constraintInstruction = "";
+        // LOGIC MODE: Strict (Fokus) vs Smart (Kreatif)
+        let constraint = "";
         if (generationMode.value === "hard") {
-            constraintInstruction = `
-            CRITICAL CONSTRAINTS (STRICT MODE):
-            - Questions and Answers must be derived 100% ONLY from the source material provided.
-            - Do NOT add external facts, even if they are correct.
+            constraint = `
+            ATURAN MODE FOKUS (STRICT):
+            - Pertanyaan dan Jawaban WAJIB 100% berdasarkan materi sumber yang diberikan.
+            - JANGAN menambah fakta dari luar materi.
+            - Pada field "source", sebutkan spesifik bagian mana di materi (contoh: "Slide Halaman 2", "Paragraf 1").
             `;
         } else {
-            constraintInstruction = `
-            CREATIVE GUIDELINES (SMART MODE):
-            - Use the source material as the primary foundation.
-            - You are ENCOURAGED to use your internal knowledge to explain concepts more clearly.
-            - Add relevant context, examples, or analogies.
+            constraint = `
+            ATURAN MODE KREATIF (SMART):
+            - Gunakan materi sumber sebagai pondasi utama.
+            - Anda DIHARUSKAN menggunakan pengetahuan umum Anda untuk menjelaskan konsep yang sulit agar lebih mudah dimengerti (seperti dosen menjelaskan ke mahasiswa).
+            - Berikan contoh nyata atau analogi jika perlu.
+            - Pada field "source", tulis "Penjelasan Tambahan AI" atau "Konteks Materi".
             `;
         }
 
+        // PROMPT UTAMA (STRICT INDONESIA, UI PROMPT ENGLISH)
         const finalPrompt = `
-            ACT AS: Expert Professor.
-            ORIGINAL TOPIC: "${subjectTitle.value}"
+            BERPERANLAH SEBAGAI: Dosen Pembimbing Akademik yang Cerdas & Peduli.
+            TOPIK: "${subjectTitle.value}"
 
-            TASK 1 (SMART TAGGING):
-            Analyze the "ORIGINAL TOPIC". Create a SHORT, CATCHY TAG (Max 2-3 words).
-            Example: "Anxiety Remaja", "Sejarah RI".
+            INSTRUKSI UTAMA:
+            Semua Output (Pertanyaan, Jawaban, Tag) WAJIB dalam BAHASA INDONESIA yang natural, akademis namun mudah dipahami mahasiswa.
 
-            TASK 2 (CONTENT GENERATION):
-            Study the provided material carefully.
-            Create ${questionCount.value} Flashcard Questions (Multiple Choice/Short Answer).
+            TUGAS 1 (SMART TAGGING):
+            Analisis TOPIK. Buat "tag" yang SANGAT RINGKAS & CATCHY (Maks 3 kata).
+            Contoh: "Psikologi Anak", "Sejarah RI".
 
-            ${constraintInstruction}
+            TUGAS 2 (KONTEN FLASHCARD):
+            Pelajari materi yang diberikan dengan teliti.
+            Buatlah ${questionCount.value} Soal Flashcard (Tanya Jawab).
 
-            OUTPUT FORMAT (Strict JSON Array):
-            [{"id":1, "tag":"[AI_GENERATED_TAG]", "icon":"Brain", "q":"Question?", "a":"Answer."}]
+            ${constraint}
 
-            Allowed Icons: Brain, MessageCircle, Dna, Lightbulb, Heart, Star, Zap.
+            FORMAT OUTPUT (Wajib JSON Array Murni):
+            [
+              {
+                "id": 1,
+                "tag": "...",
+                "icon": "Brain",
+                "q": "Pertanyaan (Bahasa Indonesia)?",
+                "a": "Jawaban penjelasan lengkap (Bahasa Indonesia).",
+                "source": "Sumber info"
+              }
+            ]
 
-            ${filePart ? "SOURCE: ATTACHED PDF DOCUMENT" : `SOURCE MATERIAL:\n"${extractedText}"`}
+            Pilihan Icon: Brain, MessageCircle, Dna, Lightbulb, Heart, Star, Zap.
+
+            ${filePart ? "SUMBER: DOKUMEN PDF TERLAMPIR" : `SUMBER TEKS:\n"${extractedText}"`}
         `;
 
         let result = await tryProviderWithRotation(
@@ -425,6 +416,7 @@ const generateQuestions = async () => {
             filePart,
         );
 
+        // Cleaning Response
         result = result.replace(/```json|```/g, "").trim();
         const firstBracket = result.indexOf("[");
         const lastBracket = result.lastIndexOf("]");
@@ -438,22 +430,21 @@ const generateQuestions = async () => {
                 tag: item.tag || subjectTitle.value,
             }));
             addToast(
-                `Success! ${generatedQuestions.value.length} items generated (${generationMode.value === "hard" ? "Strict" : "Smart"} Mode).`,
+                `Generated ${generatedQuestions.value.length} Smart Cards!`,
                 "success",
             );
 
             await nextTick();
-            if (previewSection.value) {
+            if (previewSection.value)
                 previewSection.value.scrollIntoView({
                     behavior: "smooth",
                     block: "start",
                 });
-            }
         } else {
-            throw new Error("Invalid JSON response from AI.");
+            throw new Error("Invalid JSON Format.");
         }
     } catch (error) {
-        console.error("Pipeline Error:", error);
+        console.error(error);
         addToast(error.message, "error");
     } finally {
         isLoading.value = false;
@@ -461,29 +452,28 @@ const generateQuestions = async () => {
     }
 };
 
-// --- EDITING LOGIC ---
-const startEdit = (index) => {
-    editingIndex.value = index;
+// --- ACTIONS ---
+const startEdit = (i) => {
+    editingIndex.value = i;
     tempEditData.value = JSON.parse(
-        JSON.stringify(generatedQuestions.value[index]),
+        JSON.stringify(generatedQuestions.value[i]),
     );
 };
-
-const saveEdit = (index) => {
-    generatedQuestions.value[index] = { ...tempEditData.value };
+const saveEdit = (i) => {
+    generatedQuestions.value[i] = { ...tempEditData.value };
     editingIndex.value = null;
-    addToast("Changes saved!", "success");
+    addToast("Changes Saved!", "success");
 };
-
 const cancelEdit = () => {
     editingIndex.value = null;
     tempEditData.value = {};
 };
 
+// Generate Summary Material (Textarea Only)
 const generateMaterialFromTitle = async () => {
-    if (!subjectTitle.value) return addToast("Tag/Title Required!", "error");
+    if (!subjectTitle.value) return addToast("Title Required!", "error");
     isGeneratingMaterial.value = true;
-    const prompt = `Buatkan rangkuman kuliah padat tentang "${subjectTitle.value}". Bahasa Indonesia.`;
+    const prompt = `Bertindaklah sebagai Dosen. Buatkan rangkuman kuliah padat, jelas, dan terstruktur tentang "${subjectTitle.value}". Gunakan Bahasa Indonesia.`;
     try {
         const result = await tryProviderWithRotation(
             currentProvider.value,
@@ -507,9 +497,7 @@ const saveToDatabase = async () => {
             createdAt: new Date(),
             questionsList: generatedQuestions.value,
         });
-        addToast("Saved to Database! 🎉", "success");
-
-        // Hapus Data & Bersihkan Draft
+        addToast("Saved to DB! 🎉", "success");
         subjectTitle.value = "";
         rawMaterial.value = "";
         generatedQuestions.value = [];
@@ -517,16 +505,15 @@ const saveToDatabase = async () => {
         pdfFileName.value = "";
         const fileInput = document.getElementById("pdf-upload");
         if (fileInput) fileInput.value = "";
-
-        clearDraft(); // Hapus draft karena sudah tersimpan aman di DB
+        clearDraft();
     } catch (error) {
         addToast("Save Failed: " + error.message, "error");
     } finally {
         isSaving.value = false;
     }
 };
-const removeDraft = (index) => {
-    generatedQuestions.value.splice(index, 1);
+const removeDraft = (i) => {
+    generatedQuestions.value.splice(i, 1);
 };
 const handleLogout = async () => {
     await signOut(auth);
@@ -537,14 +524,14 @@ const confirmResetAction = async () => {
     showResetModal.value = false;
     isResetting.value = true;
     try {
-        const querySnapshot = await getDocs(collection(db, "courses"));
+        const q = await getDocs(collection(db, "courses"));
         await Promise.all(
-            querySnapshot.docs.map((d) => deleteDoc(doc(db, "courses", d.id))),
+            q.docs.map((d) => deleteDoc(doc(db, "courses", d.id))),
         );
-        clearDraft(); // Reset DB juga menghapus draft
-        addToast("Database Reset Successful.", "success");
+        clearDraft();
+        addToast("Database Cleaned.", "success");
     } catch (e) {
-        addToast("Reset Failed: " + e.message, "error");
+        addToast("Reset Failed.", "error");
     } finally {
         isResetting.value = false;
     }
@@ -576,9 +563,9 @@ const deleteCourse = async (id, title) => {
         existingCourses.value = existingCourses.value.filter(
             (c) => c.id !== id,
         );
-        addToast(`Material Deleted.`, "success");
+        addToast(`Deleted.`, "success");
     } catch (e) {
-        addToast("Delete Failed: " + e.message, "error");
+        addToast("Failed.", "error");
     }
 };
 const formatDate = (timestamp) => {
@@ -597,7 +584,7 @@ const formatDate = (timestamp) => {
     >
         <ConfirmModal
             :isOpen="showResetModal"
-            title="Delete All Data?"
+            title="Wipe All Data?"
             message="This action is permanent."
             @close="showResetModal = false"
             @confirm="confirmResetAction"
@@ -696,7 +683,7 @@ const formatDate = (timestamp) => {
                             <button
                                 @click="deleteCourse(course.id, course.title)"
                                 class="p-2 text-cozy-muted hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                                title="Delete"
+                                title="Hapus"
                             >
                                 <Trash2 class="w-4 h-4" />
                             </button>
@@ -717,49 +704,51 @@ const formatDate = (timestamp) => {
             class="bg-cozy-card border-b border-cozy-border sticky top-0 z-30 shadow-sm backdrop-blur-xl bg-opacity-95"
         >
             <div
-                class="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4"
+                class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4"
             >
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3 flex-1 min-w-0">
                     <div
-                        class="w-10 h-10 bg-cozy-primary text-white rounded-xl flex items-center justify-center shadow-lg shadow-cozy-primary/30"
+                        class="w-10 h-10 bg-cozy-primary text-white rounded-xl flex items-center justify-center shadow-lg shadow-cozy-primary/30 shrink-0"
                     >
                         <Settings2 class="w-6 h-6 animate-spin-slow" />
                     </div>
-                    <div>
+                    <div class="truncate">
                         <h1
                             class="font-display text-lg font-bold text-cozy-text leading-tight"
                         >
-                            Admin Console
+                            Admin
                         </h1>
-                        <div class="flex items-center gap-2">
-                            <span
-                                class="w-2 h-2 rounded-full bg-green-500 animate-pulse"
-                            ></span>
-                            <p class="text-xs text-cozy-muted font-medium">
-                                System Operational
-                            </p>
-                        </div>
+                        <p
+                            class="text-xs text-cozy-muted font-medium hidden md:block"
+                        >
+                            System Operational
+                        </p>
                     </div>
                 </div>
-                <div class="flex gap-2">
+                <div class="flex gap-2 shrink-0">
                     <button
                         @click="openMaterialsModal"
-                        class="flex items-center gap-2 px-4 py-2 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-primary hover:text-white hover:border-cozy-primary transition-all"
+                        class="flex items-center gap-2 px-3 py-2 md:px-4 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-primary hover:text-white hover:border-cozy-primary transition-all"
+                        title="Perpustakaan"
                     >
-                        <Library class="w-4 h-4" /> Library
+                        <Library class="w-4 h-4" />
+                        <span class="hidden md:inline">Library</span>
                     </button>
                     <button
-                        @click="openResetModal"
-                        :disabled="isResetting"
-                        class="flex items-center gap-2 px-4 py-2 bg-red-50 border border-red-100 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition-all"
+                        @click="router.push('/')"
+                        class="flex items-center gap-2 px-3 py-2 md:px-4 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-white transition-all"
+                        title="Ke Beranda"
                     >
-                        <Eraser class="w-4 h-4" /> Reset DB
+                        <Home class="w-4 h-4" />
+                        <span class="hidden md:inline">Home</span>
                     </button>
                     <button
                         @click="handleLogout"
-                        class="flex items-center gap-2 px-4 py-2 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-cozy-bg transition-all"
+                        class="flex items-center gap-2 px-3 py-2 md:px-4 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-cozy-bg transition-all"
+                        title="Keluar"
                     >
-                        <LogOut class="w-4 h-4" /> Exit
+                        <LogOut class="w-4 h-4" />
+                        <span class="hidden md:inline">Exit</span>
                     </button>
                 </div>
             </div>
@@ -815,7 +804,7 @@ const formatDate = (timestamp) => {
                         <div class="flex justify-between items-center mb-3">
                             <span
                                 class="text-[10px] font-bold text-cozy-muted uppercase flex items-center gap-1"
-                                ><Zap class="w-3 h-3" /> Energy Cells</span
+                                ><Zap class="w-3 h-3" /> AI Power</span
                             ><button
                                 @click="isAutoKey = !isAutoKey"
                                 class="text-[10px] font-bold px-2 py-1 rounded-lg border transition-all"
@@ -866,13 +855,25 @@ const formatDate = (timestamp) => {
                             <p
                                 class="text-[10px] font-bold text-blue-700 uppercase tracking-wide"
                             >
-                                AI Relay Pipeline Active
+                                AI Pipeline Active
                             </p>
                             <p class="text-[10px] text-blue-600 leading-tight">
-                                Gemini (Vision) <span class="mx-1">&rarr;</span>
-                                {{ providers[currentProvider].name }} (Logic)
+                                Gemini (Reader) <span class="mx-1">&rarr;</span>
+                                {{ providers[currentProvider].name }} (Thinker)
                             </p>
                         </div>
+                    </div>
+
+                    <div
+                        class="mt-6 pt-4 border-t border-dashed border-cozy-border"
+                    >
+                        <button
+                            @click="openResetModal"
+                            :disabled="isResetting"
+                            class="w-full py-2 flex items-center justify-center gap-2 text-red-500 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl text-xs font-bold transition-all opacity-70 hover:opacity-100"
+                        >
+                            <AlertTriangle class="w-4 h-4" /> System Reset
+                        </button>
                     </div>
                 </div>
 
@@ -898,7 +899,7 @@ const formatDate = (timestamp) => {
                                     /><input
                                         v-model="subjectTitle"
                                         type="text"
-                                        placeholder="Ex: Cognitive Psychology"
+                                        placeholder="Ex: Psikologi Kognitif"
                                         class="w-full pl-9 pr-4 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all"
                                     />
                                 </div>
@@ -908,7 +909,7 @@ const formatDate = (timestamp) => {
                                         isGeneratingMaterial || !subjectTitle
                                     "
                                     class="w-12 flex items-center justify-center bg-gradient-to-br from-cozy-accent to-yellow-500 text-white rounded-xl shadow-md hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
-                                    title="AI Generate Material"
+                                    title="AI Buat Ringkasan Materi"
                                 >
                                     <Loader2
                                         v-if="isGeneratingMaterial"
@@ -935,7 +936,7 @@ const formatDate = (timestamp) => {
                                             : 'text-cozy-muted hover:text-cozy-text'
                                     "
                                 >
-                                    <Lock class="w-3 h-3" /> Strict
+                                    <Lock class="w-3 h-3" /> Strict Focus
                                 </button>
                                 <button
                                     @click="generationMode = 'soft'"
@@ -946,7 +947,7 @@ const formatDate = (timestamp) => {
                                             : 'text-cozy-muted hover:text-cozy-text'
                                     "
                                 >
-                                    <Globe class="w-3 h-3" /> Smart
+                                    <Globe class="w-3 h-3" /> Smart Creative
                                 </button>
                             </div>
                             <p
@@ -954,8 +955,8 @@ const formatDate = (timestamp) => {
                             >
                                 {{
                                     generationMode === "hard"
-                                        ? "🔒 Strict: 100% based on PDF. No outside facts."
-                                        : "✨ Smart: Uses PDF + AI Knowledge for better context."
+                                        ? "🔒 Focus: Jawaban 100% dari materi PDF. Tanpa opini luar."
+                                        : "✨ Smart: Menggunakan materi PDF + pengetahuan umum AI untuk penjelasan."
                                 }}
                             </p>
                         </div>
@@ -1011,7 +1012,7 @@ const formatDate = (timestamp) => {
                                         <span class="text-xs font-bold">{{
                                             isDragging
                                                 ? "Drop PDF Here!"
-                                                : "Upload Lecture PDF"
+                                                : "Upload PDF"
                                         }}</span>
                                         <span class="text-[9px] opacity-70">{{
                                             isDragging
@@ -1052,7 +1053,7 @@ const formatDate = (timestamp) => {
                             <textarea
                                 v-model="rawMaterial"
                                 rows="4"
-                                placeholder="Paste text here if you don't have PDF..."
+                                placeholder="Or paste text material here..."
                                 class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-xs leading-relaxed text-cozy-text focus:border-cozy-primary outline-none resize-none transition-all"
                             ></textarea>
                         </div>
@@ -1176,14 +1177,20 @@ const formatDate = (timestamp) => {
                                 v-model="tempEditData.q"
                                 type="text"
                                 class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none"
-                                placeholder="Question..."
+                                placeholder="Pertanyaan..."
                             />
                             <textarea
                                 v-model="tempEditData.a"
                                 rows="4"
                                 class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm text-cozy-text focus:border-cozy-primary outline-none resize-none"
-                                placeholder="Answer..."
+                                placeholder="Jawaban..."
                             ></textarea>
+                            <input
+                                v-model="tempEditData.source"
+                                type="text"
+                                class="w-full p-2 bg-cozy-bg border border-cozy-border rounded-xl text-xs font-bold text-cozy-muted focus:border-cozy-primary outline-none"
+                                placeholder="Sumber (Opsional)..."
+                            />
                         </div>
 
                         <div v-else class="h-full relative">
