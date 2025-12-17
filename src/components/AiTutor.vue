@@ -1,8 +1,8 @@
 <script setup>
-import { ref, nextTick, onMounted, watch } from "vue";
+import { ref, nextTick, onMounted, watch, computed } from "vue";
 import { marked } from "marked";
 import { playPop } from "../utils/sound.js";
-// Hapus import GoogleGenerativeAI library, kita pakai fetch manual biar konsisten dengan provider lain
+import { geminiKeys, groqKeys, aimlKeys } from "../utils/aiConfig.js";
 import {
     Settings,
     X,
@@ -11,25 +11,74 @@ import {
     Bot,
     User,
     Loader2,
-    Heart,
-    Lightbulb,
-    Smile,
-    ChevronRight,
-    Brain,
     Stethoscope,
     GraduationCap,
-    RefreshCw,
     Save,
     Trash2,
     Key,
     Sliders,
     Zap,
     Cloud,
+    Check,
+    ChevronDown,
+    Layers,
+    BookOpen,
+    Info,
+    Dice5, // Icon dadu untuk tombol Auto Generate
 } from "lucide-vue-next";
+
+// --- DATA KEYS DARI ENV ---
+const availableKeys = {
+    gemini: geminiKeys,
+    groq: groqKeys,
+    aiml: aimlKeys,
+    hybrid: [],
+};
+
+// --- DATA DUMMY PASIEN (AUTO GENERATE) ---
+const dummyPatients = [
+    {
+        name: "Andi",
+        age: "22 th",
+        complaint:
+            "Saya merasa sangat cemas (anxiety) setiap kali harus berbicara di depan umum atau presentasi. Jantung berdebar kencang sampai blank.",
+    },
+    {
+        name: "Siti",
+        age: "19 th",
+        complaint:
+            "Akhir-akhir ini saya sering menangis tanpa alasan yang jelas, kehilangan selera makan, dan malas keluar kamar kos.",
+    },
+    {
+        name: "Budi",
+        age: "28 th",
+        complaint:
+            "Saya mengalami burnout parah di kantor. Rasanya lelah mental setiap bangun pagi, padahal baru saja tidur cukup.",
+    },
+    {
+        name: "Rina",
+        age: "35 th",
+        complaint:
+            "Saya merasa terjebak dalam hubungan toxic dengan pasangan, tapi saya takut sendirian jika harus putus.",
+    },
+    {
+        name: "Deni",
+        age: "17 th",
+        complaint:
+            "Orang tua saya menuntut nilai sempurna. Saya jadi sering sakit perut dan pusing setiap mau ujian sekolah.",
+    },
+    {
+        name: "Maya",
+        age: "24 th",
+        complaint:
+            "Saya sulit tidur (insomnia) hampir setiap malam karena overthinking tentang masa depan dan karir saya.",
+    },
+];
 
 // --- STATE UTAMA ---
 const isOpen = ref(false);
 const showSettings = ref(false);
+const showPersonaMenu = ref(false);
 const inputMessage = ref("");
 const isLoading = ref(false);
 const chatContainer = ref(null);
@@ -43,41 +92,73 @@ const activeSystemPrompt = ref("");
 
 // --- SETTINGS CONFIG ---
 const apiConfig = ref({
-    provider: localStorage.getItem("user_ai_provider") || "gemini", // Default provider
-    apiKey: localStorage.getItem("user_custom_key") || "",
-    model: localStorage.getItem("user_ai_model") || "gemini-2.5-flash", // Default Model 2.5
+    provider: localStorage.getItem("user_ai_provider") || "hybrid",
+    model: localStorage.getItem("user_ai_model") || "gemini-2.5-flash",
     temperature: parseFloat(localStorage.getItem("user_ai_temp") || 0.7),
+    keyPrefs: JSON.parse(
+        localStorage.getItem("user_ai_key_prefs") ||
+            '{"gemini":"auto","groq":"auto","aiml":"auto"}',
+    ),
+});
+
+// --- HELPER: TEMPERATURE LABEL ---
+const tempLabel = computed(() => {
+    const t = apiConfig.value.temperature;
+    if (t <= 0.3)
+        return {
+            text: "Fokus & Tepat",
+            desc: "Jawaban faktual, minim halusinasi.",
+            color: "text-blue-500",
+        };
+    if (t <= 0.7)
+        return {
+            text: "Seimbang (Recommended)",
+            desc: "Kombinasi fakta & gaya bahasa luwes.",
+            color: "text-green-500",
+        };
+    return {
+        text: "Kreatif & Imajinatif",
+        desc: "Cocok untuk ide cerita atau brainstorming.",
+        color: "text-purple-500",
+    };
 });
 
 // --- PROVIDERS LIST ---
 const providers = {
+    hybrid: {
+        name: "Hybrid AI (Auto)",
+        icon: Layers,
+        models: [{ id: "auto-best", name: "Auto-Select Model" }],
+        tag: "Recommended",
+        tagColor: "bg-emerald-100 text-emerald-700",
+        desc: "Mode terpintar. Otomatis memilih AI terbaik yang tersedia & melakukan switch jika ada error.",
+    },
     gemini: {
-        name: "Gemini",
+        name: "Google Gemini",
         icon: Sparkles,
-        models: [
-            { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash (Recommended)" },
-            { id: "gemini-1.5-flash", name: "Gemini 1.5 Flash" },
-            { id: "gemini-1.5-pro", name: "Gemini 1.5 Pro" },
-        ],
-        desc: "Multimodal & Cerdas",
+        models: [{ id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" }],
+        tag: "Balanced",
+        tagColor: "bg-blue-100 text-blue-700",
+        desc: "Keseimbangan bagus antara kecepatan dan kecerdasan logika.",
+    },
+    aiml: {
+        name: "GPT-4o (via AIML)",
+        icon: Cloud,
+        models: [{ id: "gpt-4o", name: "GPT-4o" }],
+        tag: "Smartest",
+        tagColor: "bg-purple-100 text-purple-700",
+        desc: "Model paling cerdas untuk penalaran kompleks, namun kadang lebih lambat.",
     },
     groq: {
-        name: "Groq",
+        name: "Groq (Llama 3)",
         icon: Zap,
         models: [
             { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
             { id: "mixtral-8x7b-32768", name: "Mixtral 8x7B" },
         ],
-        desc: "Super Cepat",
-    },
-    aiml: {
-        name: "AIML (GPT)",
-        icon: Cloud,
-        models: [
-            { id: "gpt-4o", name: "GPT-4o" },
-            { id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo" },
-        ],
-        desc: "Premium Quality",
+        tag: "Fastest",
+        tagColor: "bg-orange-100 text-orange-700",
+        desc: "Respon super instan. Cocok untuk percakapan cepat tanpa mikir berat.",
     },
 };
 
@@ -89,10 +170,10 @@ const personas = {
         icon: GraduationCap,
         color: "text-blue-500",
         bg: "bg-blue-50",
-        desc: "Tanya materi apa aja.",
-        basePrompt: `Anda adalah "Dosen Santuy", asisten belajar pribadi untuk mahasiswa Psikologi.
-        Gaya bicara: Santai, suportif, menggunakan analogi sehari-hari, dan emoji.
-        Tugas: Jelaskan konsep rumit menjadi sangat sederhana. Jawab pertanyaan user dengan ramah.`,
+        desc: "Belajar santai rasa tongkrongan.",
+        basePrompt: `Anda adalah "Dosen Santuy", asisten belajar pribadi.
+        Gaya bicara: Hangat, santai, suportif, gunakan emoji, dan analogi sederhana.
+        Tugas: Jelaskan konsep rumit menjadi sangat sederhana.`,
     },
     patient: {
         id: "patient",
@@ -100,73 +181,35 @@ const personas = {
         icon: Stethoscope,
         color: "text-green-500",
         bg: "bg-green-50",
-        desc: "Simulasi kasus custom.",
+        desc: "Simulasi diagnosa kasus klinis.",
         basePrompt: null,
     },
     examiner: {
         id: "examiner",
         name: "Dosen Penguji",
-        icon: Brain,
+        icon: BookOpen,
         color: "text-purple-500",
         bg: "bg-purple-50",
-        desc: "Uji pemahamanmu.",
+        desc: "Uji pemahaman materi (mode serius).",
         basePrompt: `Anda adalah Dosen Penguji yang Kritis.
-        Tugas: JANGAN berikan jawaban langsung. Jika user bertanya, balikkan dengan pertanyaan pancingan (Socratic Method) untuk menguji pemahaman logikanya.
-        Gaya bicara: Formal, menantang, akademis.`,
+        Tugas: JANGAN berikan jawaban langsung. Gunakan Socratic Method (tanya balik).
+        Gaya bicara: Formal, akademis, sedikit mengintimidasi tapi sopan.`,
     },
 };
 
-// --- HELPER API KEY ---
-const getEffectiveApiKey = (provider) => {
-    // 1. Cek User Custom Key
-    if (apiConfig.value.apiKey && apiConfig.value.provider === provider)
-        return apiConfig.value.apiKey;
-
-    // 2. Cek ENV (Rotasi)
-    let envPrefix = "";
-    let maxKeys = 5;
-    if (provider === "gemini") {
-        envPrefix = "VITE_GEMINI_API_KEY";
-        maxKeys = 10;
-    } else if (provider === "groq") {
-        envPrefix = "VITE_GROQ_API_KEY";
-    } else if (provider === "aiml") {
-        envPrefix = "VITE_AIML_API_KEY";
-    }
-
-    const keys = [];
-    if (import.meta.env[envPrefix]) keys.push(import.meta.env[envPrefix]);
-    for (let i = 1; i <= maxKeys; i++) {
-        const k = import.meta.env[`${envPrefix}_${i}`];
-        if (k) keys.push(k);
-    }
-
-    if (keys.length === 0) return null;
-    return keys[Math.floor(Math.random() * keys.length)];
+// --- HELPER & LOGIC API ---
+const getKeyOptionLabel = (keyStr) => {
+    if (!keyStr) return "Invalid";
+    return `${keyStr.substring(0, 4)}...${keyStr.substring(keyStr.length - 4)}`;
 };
 
-// --- API CALLER (UNIVERSAL) ---
-const callAiApi = async (messages) => {
-    const provider = apiConfig.value.provider;
-    const model = apiConfig.value.model;
-    const apiKey = getEffectiveApiKey(provider);
-
-    if (!apiKey) throw new Error(`API Key untuk ${provider} tidak ditemukan.`);
-
-    let responseText = "";
-
-    // 1. GEMINI (v1beta)
+const fetchWithKey = async (provider, model, messages, apiKey, temp) => {
     if (provider === "gemini") {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-        // Convert format pesan ke Gemini
         const contents = messages.map((m) => ({
             role: m.role === "user" ? "user" : "model",
             parts: [{ text: m.text }],
         }));
-
-        // Sisipkan System Instruction sebagai pesan pertama (user role) jika belum support system instruction di endpoint ini
-        // Atau gunakan parameter system_instruction jika model support. Untuk aman, kita inject di awal history.
         if (activeSystemPrompt.value) {
             contents.unshift({
                 role: "user",
@@ -177,30 +220,24 @@ const callAiApi = async (messages) => {
                 parts: [{ text: "Dimengerti." }],
             });
         }
-
         const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                contents: contents,
-                generationConfig: { temperature: apiConfig.value.temperature },
+                contents,
+                generationConfig: { temperature: temp },
             }),
         });
-
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || "Gemini Error");
-        responseText = data.candidates[0].content.parts[0].text;
-    }
-
-    // 2. GROQ (OpenAI Compatible)
-    else if (provider === "groq") {
+        return data.candidates[0].content.parts[0].text;
+    } else if (provider === "groq") {
         const msgs = messages.map((m) => ({
             role: m.role === "model" ? "assistant" : "user",
             content: m.text,
         }));
         if (activeSystemPrompt.value)
             msgs.unshift({ role: "system", content: activeSystemPrompt.value });
-
         const res = await fetch(
             "https://api.groq.com/openai/v1/chat/completions",
             {
@@ -210,26 +247,22 @@ const callAiApi = async (messages) => {
                     Authorization: `Bearer ${apiKey}`,
                 },
                 body: JSON.stringify({
-                    model: model,
+                    model,
                     messages: msgs,
-                    temperature: apiConfig.value.temperature,
+                    temperature: temp,
                 }),
             },
         );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || "Groq Error");
-        responseText = data.choices[0].message.content;
-    }
-
-    // 3. AIML / CHATGPT (OpenAI Compatible)
-    else if (provider === "aiml") {
+        return data.choices[0].message.content;
+    } else if (provider === "aiml") {
         const msgs = messages.map((m) => ({
             role: m.role === "model" ? "assistant" : "user",
             content: m.text,
         }));
         if (activeSystemPrompt.value)
             msgs.unshift({ role: "system", content: activeSystemPrompt.value });
-
         const res = await fetch("https://api.aimlapi.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -237,21 +270,80 @@ const callAiApi = async (messages) => {
                 Authorization: `Bearer ${apiKey}`,
             },
             body: JSON.stringify({
-                model: model,
+                model,
                 messages: msgs,
-                temperature: apiConfig.value.temperature,
+                temperature: temp,
                 max_tokens: 1000,
             }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || "AIML Error");
-        responseText = data.choices[0].message.content;
+        return data.choices[0].message.content;
     }
-
-    return responseText;
 };
 
-// --- LOGIC UI ---
+const executeSmartApiCall = async (provider, model, messages, temp) => {
+    const keys = availableKeys[provider];
+    const pref = apiConfig.value.keyPrefs[provider];
+    let keysToTry =
+        pref === "auto" || pref === undefined
+            ? [...keys].sort(() => Math.random() - 0.5)
+            : [keys[parseInt(pref)]];
+
+    if (keysToTry.length === 0)
+        throw new Error(`Tidak ada API Key untuk ${provider}`);
+    let lastError = null;
+
+    for (let i = 0; i < keysToTry.length; i++) {
+        try {
+            return await fetchWithKey(
+                provider,
+                model,
+                messages,
+                keysToTry[i],
+                temp,
+            );
+        } catch (error) {
+            console.warn(`[${provider}] Key #${i} Failed:`, error.message);
+            lastError = error;
+            if (pref !== "auto") throw error;
+        }
+    }
+    throw new Error(`Semua kunci ${provider} sibuk. (${lastError?.message})`);
+};
+
+const callAiApi = async (messages) => {
+    const currentProvider = apiConfig.value.provider;
+    if (currentProvider === "hybrid") {
+        const strategy = [
+            { p: "gemini", m: "gemini-2.5-flash" },
+            { p: "aiml", m: "gpt-4o" },
+            { p: "groq", m: "llama-3.3-70b-versatile" },
+        ];
+        for (const strat of strategy) {
+            try {
+                return await executeSmartApiCall(
+                    strat.p,
+                    strat.m,
+                    messages,
+                    apiConfig.value.temperature,
+                );
+            } catch (e) {
+                continue;
+            }
+        }
+        throw new Error("Sistem sedang sibuk. Coba lagi nanti.");
+    } else {
+        return await executeSmartApiCall(
+            currentProvider,
+            apiConfig.value.model,
+            messages,
+            apiConfig.value.temperature,
+        );
+    }
+};
+
+// --- UI LOGIC ---
 const toggleChat = () => {
     playPop();
     isOpen.value = !isOpen.value;
@@ -260,38 +352,38 @@ const toggleChat = () => {
 
 const toggleSettings = () => {
     showSettings.value = !showSettings.value;
+    showPersonaMenu.value = false;
 };
-
 const saveSettings = () => {
     localStorage.setItem("user_ai_provider", apiConfig.value.provider);
-    localStorage.setItem("user_custom_key", apiConfig.value.apiKey);
     localStorage.setItem("user_ai_model", apiConfig.value.model);
     localStorage.setItem("user_ai_temp", apiConfig.value.temperature);
+    localStorage.setItem(
+        "user_ai_key_prefs",
+        JSON.stringify(apiConfig.value.keyPrefs),
+    );
     showSettings.value = false;
     playPop();
 };
-
 const resetSettings = () => {
     if (confirm("Reset ke default?")) {
         localStorage.removeItem("user_ai_provider");
-        localStorage.removeItem("user_custom_key");
         localStorage.removeItem("user_ai_model");
         localStorage.removeItem("user_ai_temp");
+        localStorage.removeItem("user_ai_key_prefs");
         apiConfig.value = {
-            provider: "gemini",
-            apiKey: "",
+            provider: "hybrid",
             model: "gemini-2.5-flash",
             temperature: 0.7,
+            keyPrefs: { gemini: "auto", groq: "auto", aiml: "auto" },
         };
     }
 };
-
 const changeProvider = () => {
-    // Auto select first model when provider changes
-    apiConfig.value.model = providers[apiConfig.value.provider].models[0].id;
+    if (apiConfig.value.provider !== "hybrid")
+        apiConfig.value.model =
+            providers[apiConfig.value.provider].models[0].id;
 };
-
-// --- LOGIC PERSONA ---
 const setPersona = (id) => {
     if (id === "patient") {
         showPatientForm.value = true;
@@ -300,16 +392,15 @@ const setPersona = (id) => {
     }
     startSession(id, personas[id].basePrompt);
 };
-
+const generateRandomPatient = () => {
+    playPop();
+    const random =
+        dummyPatients[Math.floor(Math.random() * dummyPatients.length)];
+    patientData.value = { ...random };
+};
 const startPatientRoleplay = () => {
     if (!patientData.value.complaint) return;
-    const dynamicPrompt = `
-        PERAN: Pasien Konseling.
-        NAMA: ${patientData.value.name || "Anonim"}
-        USIA: ${patientData.value.age || "-"}
-        KONDISI: "${patientData.value.complaint}"
-        INSTRUKSI: Jawab sebagai pasien ini. Jangan keluar karakter. Gunakan Bahasa Indonesia.
-    `;
+    const dynamicPrompt = `PERAN: Pasien Konseling. NAMA: ${patientData.value.name || "Anonim"} USIA: ${patientData.value.age || "-"} KONDISI: "${patientData.value.complaint}". INSTRUKSI: Jawab sebagai pasien ini dlm Bhs Indonesia.`;
     showPatientForm.value = false;
     startSession(
         "patient",
@@ -317,46 +408,42 @@ const startPatientRoleplay = () => {
         `(Masuk ruangan) Permisi... saya ${patientData.value.name}...`,
     );
 };
-
 const startSession = (id, prompt, customGreeting = null) => {
     activePersona.value = id;
     activeSystemPrompt.value = prompt;
     messages.value = [];
     showPatientForm.value = false;
     showSettings.value = false;
-
+    showPersonaMenu.value = false;
     let greeting = customGreeting;
     if (!greeting) {
         if (id === "tutor")
-            greeting =
-                "Halo Aiya! Dosen Santuy siap bantu. Mau bahas materi apa? ☕";
-        if (id === "examiner") greeting = "Silakan duduk. Kita mulai ujiannya.";
+            greeting = "Halo! Dosen Santuy siap bantu. Mau bahas apa? ☕";
+        if (id === "examiner")
+            greeting = "Silakan duduk. Kita mulai ujian lisannya.";
     }
     messages.value.push({ role: "model", text: greeting });
 };
-
-// --- LOGIC SEND ---
 const sendMessage = async () => {
     if (!inputMessage.value.trim() || isLoading.value) return;
-
     const userText = inputMessage.value;
     messages.value.push({ role: "user", text: userText });
     inputMessage.value = "";
     isLoading.value = true;
     scrollToBottom();
-
     try {
         const response = await callAiApi(messages.value);
         messages.value.push({ role: "model", text: response });
     } catch (error) {
-        console.error(error);
-        messages.value.push({ role: "model", text: `Error: ${error.message}` });
+        messages.value.push({
+            role: "model",
+            text: `⚠️ **Maaf**: ${error.message}`,
+        });
     } finally {
         isLoading.value = false;
         scrollToBottom();
     }
 };
-
 const scrollToBottom = () => {
     nextTick(() => {
         if (chatContainer.value)
@@ -369,7 +456,7 @@ defineExpose({
         if (!isOpen.value) toggleChat();
         setPersona("tutor");
         setTimeout(() => {
-            inputMessage.value = `Jelaskan "${question}" singkat saja.`;
+            inputMessage.value = `Jelaskan "${question}" secara ringkas.`;
             sendMessage();
         }, 500);
     },
@@ -383,10 +470,10 @@ defineExpose({
         <transition name="scale-up">
             <div
                 v-if="isOpen"
-                class="mb-4 w-[90vw] md:w-[400px] bg-white/95 backdrop-blur-xl border border-cozy-border rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[75vh] min-h-[500px] pointer-events-auto relative transform transition-all"
+                class="mb-4 w-[90vw] md:w-[400px] bg-white/95 backdrop-blur-xl border border-cozy-border rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[75vh] min-h-[500px] pointer-events-auto relative transform transition-all font-sans text-cozy-text"
             >
                 <div
-                    class="p-4 border-b border-gray-100 flex justify-between items-center shrink-0 bg-white z-10"
+                    class="p-4 border-b border-cozy-border flex justify-between items-center shrink-0 bg-white/60 backdrop-blur-md z-10 sticky top-0"
                 >
                     <div class="flex items-center gap-3">
                         <div
@@ -404,22 +491,18 @@ defineExpose({
                         </div>
                         <div>
                             <h3
-                                class="font-bold text-cozy-text text-sm leading-tight"
+                                class="font-bold text-cozy-text text-sm leading-tight tracking-wide"
                             >
                                 {{ personas[activePersona].name }}
                             </h3>
-                            <div class="flex items-center gap-1">
+                            <div class="flex items-center gap-1.5">
                                 <span
-                                    class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"
+                                    class="w-2 h-2 rounded-full bg-green-400 animate-pulse"
                                 ></span>
-                                <p class="text-[10px] text-cozy-muted">
-                                    {{ apiConfig.provider }} •
-                                    {{
-                                        apiConfig.model
-                                            .replace("gemini-", "")
-                                            .replace("llama-", "")
-                                            .replace("gpt-", "")
-                                    }}
+                                <p
+                                    class="text-[10px] text-cozy-muted font-bold uppercase tracking-wider"
+                                >
+                                    {{ providers[apiConfig.provider]?.name }}
                                 </p>
                             </div>
                         </div>
@@ -427,14 +510,14 @@ defineExpose({
                     <div class="flex items-center gap-1">
                         <button
                             @click="toggleSettings"
-                            class="p-2 hover:bg-gray-100 rounded-full text-cozy-muted transition-colors"
-                            title="Pengaturan"
+                            class="p-2 hover:bg-gray-100 rounded-full text-cozy-muted hover:text-cozy-text transition-colors"
+                            title="Settings"
                         >
                             <Settings class="w-5 h-5" />
                         </button>
                         <button
                             @click="toggleChat"
-                            class="p-2 hover:bg-red-50 hover:text-red-500 rounded-full transition-colors text-cozy-muted"
+                            class="p-2 hover:bg-red-50 hover:text-red-400 rounded-full transition-colors text-cozy-muted"
                         >
                             <X class="w-5 h-5" />
                         </button>
@@ -442,101 +525,164 @@ defineExpose({
                 </div>
 
                 <div
-                    class="px-4 py-2 flex gap-2 overflow-x-auto no-scrollbar border-b border-gray-100 shrink-0 bg-gray-50/50"
+                    class="px-4 py-2 border-b border-cozy-border bg-cozy-bg/50 relative z-20"
                 >
                     <button
-                        v-for="p in personas"
-                        :key="p.id"
-                        @click="setPersona(p.id)"
-                        class="px-3 py-1.5 rounded-lg text-[10px] font-bold whitespace-nowrap transition-all border flex items-center gap-1.5"
-                        :class="
-                            activePersona === p.id
-                                ? 'bg-white border-cozy-primary text-cozy-primary shadow-sm'
-                                : 'bg-transparent border-transparent text-gray-400 hover:text-gray-600'
-                        "
+                        @click="showPersonaMenu = !showPersonaMenu"
+                        class="w-full flex items-center justify-between px-3 py-2 bg-white border border-cozy-border rounded-xl text-xs font-bold text-cozy-text shadow-sm hover:border-cozy-primary transition-all group"
                     >
-                        <component :is="p.icon" class="w-3 h-3" />
-                        {{ p.name }}
+                        <div class="flex items-center gap-2">
+                            <component
+                                :is="personas[activePersona].icon"
+                                class="w-3.5 h-3.5 text-cozy-muted"
+                            />
+                            <span
+                                >Ganti Mode:
+                                {{ personas[activePersona].name }}</span
+                            >
+                        </div>
+                        <ChevronDown
+                            class="w-4 h-4 text-cozy-muted transition-transform duration-300"
+                            :class="{ 'rotate-180': showPersonaMenu }"
+                        />
                     </button>
+                    <div
+                        v-if="showPersonaMenu"
+                        class="absolute top-full left-4 right-4 mt-2 bg-white border border-cozy-border rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2"
+                    >
+                        <div class="py-1">
+                            <button
+                                v-for="p in personas"
+                                :key="p.id"
+                                @click="
+                                    setPersona(p.id);
+                                    showPersonaMenu = false;
+                                "
+                                class="w-full px-4 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left border-b border-gray-50 last:border-0"
+                                :class="
+                                    activePersona === p.id
+                                        ? 'bg-cozy-primary/5'
+                                        : ''
+                                "
+                            >
+                                <div
+                                    class="p-2 rounded-lg shrink-0"
+                                    :class="p.bg + ' ' + p.color"
+                                >
+                                    <component :is="p.icon" class="w-4 h-4" />
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-xs font-bold text-cozy-text">
+                                        {{ p.name }}
+                                    </p>
+                                    <p
+                                        class="text-[10px] text-cozy-muted leading-tight"
+                                    >
+                                        {{ p.desc }}
+                                    </p>
+                                </div>
+                                <Check
+                                    v-if="activePersona === p.id"
+                                    class="w-4 h-4 text-cozy-primary shrink-0"
+                                />
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div
-                    v-if="showPatientForm"
-                    class="absolute inset-0 z-20 bg-white flex flex-col p-6 animate-in fade-in slide-in-from-bottom-4 top-[120px]"
+                    ref="chatContainer"
+                    class="flex-1 overflow-y-auto p-4 space-y-4 bg-cozy-bg/30"
                 >
-                    <h3
-                        class="font-bold text-cozy-text text-lg mb-1 flex items-center gap-2"
+                    <div
+                        v-for="(msg, index) in messages"
+                        :key="index"
+                        class="flex gap-3 group"
+                        :class="msg.role === 'user' ? 'flex-row-reverse' : ''"
                     >
-                        <Stethoscope class="w-5 h-5 text-green-500" /> Pasien
-                        Baru
-                    </h3>
-                    <p class="text-xs text-cozy-muted mb-4">
-                        Setting karakter pasien untuk latihan.
-                    </p>
-                    <div class="space-y-3 flex-1 overflow-y-auto pr-1">
-                        <div>
-                            <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase"
-                                >Nama</label
-                            >
-                            <input
-                                v-model="patientData.name"
-                                type="text"
-                                placeholder="Misal: Budi"
-                                class="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:border-green-500 outline-none transition-all"
+                        <div
+                            class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm border border-cozy-border transition-transform group-hover:scale-105"
+                            :class="
+                                msg.role === 'user' ? 'bg-white' : 'bg-white'
+                            "
+                        >
+                            <User
+                                v-if="msg.role === 'user'"
+                                class="w-4 h-4 text-gray-400"
+                            />
+                            <component
+                                v-else
+                                :is="personas[activePersona]?.icon || Bot"
+                                class="w-4 h-4"
+                                :class="personas[activePersona]?.color"
                             />
                         </div>
-                        <div>
-                            <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase"
-                                >Usia</label
-                            >
-                            <input
-                                v-model="patientData.age"
-                                type="text"
-                                placeholder="Misal: 25 th"
-                                class="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:border-green-500 outline-none transition-all"
+                        <div
+                            class="max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm break-words overflow-hidden"
+                            :class="
+                                msg.role === 'user'
+                                    ? 'bg-cozy-primary text-white rounded-tr-sm'
+                                    : 'bg-white text-cozy-text rounded-tl-sm border border-cozy-border'
+                            "
+                        >
+                            <div
+                                class="prose prose-sm max-w-none break-words"
+                                :class="
+                                    msg.role === 'user'
+                                        ? 'prose-invert'
+                                        : 'prose-gray'
+                                "
+                                v-html="marked.parse(msg.text)"
+                            ></div>
+                        </div>
+                    </div>
+                    <div v-if="isLoading" class="flex gap-3 fade-in">
+                        <div
+                            class="w-8 h-8 bg-white rounded-full flex items-center justify-center border border-cozy-border"
+                        >
+                            <Sparkles
+                                class="w-4 h-4 text-cozy-primary animate-spin-slow"
                             />
                         </div>
-                        <div>
-                            <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase"
-                                >Keluhan</label
-                            >
-                            <textarea
-                                v-model="patientData.complaint"
-                                rows="4"
-                                placeholder="Ceritakan kondisinya..."
-                                class="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:border-green-500 outline-none resize-none transition-all"
-                            ></textarea>
+                        <div
+                            class="bg-white/50 px-4 py-3 rounded-2xl rounded-tl-sm text-xs text-cozy-muted italic flex items-center gap-2 border border-cozy-border border-dashed"
+                        >
+                            <Loader2 class="w-3 h-3 animate-spin" /> Sedang
+                            berpikir...
                         </div>
                     </div>
-                    <div class="mt-4 flex gap-2 pt-2 border-t border-gray-100">
+                </div>
+
+                <div class="p-3 bg-white border-t border-cozy-border shrink-0">
+                    <form @submit.prevent="sendMessage" class="relative group">
+                        <input
+                            v-model="inputMessage"
+                            type="text"
+                            placeholder="Ketik sesuatu..."
+                            class="w-full pl-5 pr-12 py-3 bg-cozy-bg/50 border border-gray-200 rounded-xl text-sm focus:border-cozy-primary focus:ring-2 focus:ring-cozy-primary/20 outline-none transition-all placeholder:text-cozy-muted font-medium text-cozy-text"
+                        />
                         <button
-                            @click="showPatientForm = false"
-                            class="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-500 font-bold text-xs hover:bg-gray-50"
+                            type="submit"
+                            :disabled="!inputMessage || isLoading"
+                            class="absolute right-2 top-2 p-1.5 bg-cozy-primary text-white rounded-lg hover:bg-cozy-accent transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg active:scale-95"
                         >
-                            Batal
+                            <Send class="w-4 h-4" />
                         </button>
-                        <button
-                            @click="startPatientRoleplay"
-                            :disabled="!patientData.complaint"
-                            class="flex-[2] py-2.5 rounded-xl bg-green-500 text-white font-bold text-xs shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
-                        >
-                            Mulai <ChevronRight class="w-4 h-4" />
-                        </button>
-                    </div>
+                    </form>
                 </div>
 
                 <div
                     v-if="showSettings"
-                    class="absolute inset-0 z-30 bg-white/95 backdrop-blur-sm flex flex-col p-6 animate-in fade-in slide-in-from-top-4"
+                    class="absolute inset-0 z-30 bg-white/95 backdrop-blur-sm flex flex-col p-6 animate-in fade-in slide-in-from-top-4 overflow-hidden"
                 >
-                    <div class="flex justify-between items-center mb-6">
+                    <div
+                        class="flex justify-between items-center mb-6 shrink-0"
+                    >
                         <h3
                             class="font-bold text-cozy-text text-lg flex items-center gap-2"
                         >
-                            <Settings class="w-5 h-5" /> Pengaturan AI
+                            <Settings class="w-5 h-5 text-cozy-muted" />
+                            Pengaturan AI
                         </h3>
                         <button
                             @click="showSettings = false"
@@ -545,13 +691,17 @@ defineExpose({
                             <X class="w-5 h-5 text-gray-400" />
                         </button>
                     </div>
-                    <div class="space-y-5 flex-1 overflow-y-auto">
+
+                    <div
+                        class="flex-1 overflow-y-auto space-y-8 pr-2 custom-scrollbar"
+                    >
                         <div>
                             <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 flex items-center gap-1"
-                                ><Brain class="w-3 h-3" /> AI Provider</label
+                                class="text-[10px] font-bold text-cozy-muted uppercase mb-3 flex items-center gap-1 tracking-wider"
+                                ><Sparkles class="w-3 h-3" /> Pilih Otak AI
+                                (Provider)</label
                             >
-                            <div class="grid grid-cols-3 gap-2">
+                            <div class="space-y-3">
                                 <button
                                     v-for="(val, key) in providers"
                                     :key="key"
@@ -559,184 +709,238 @@ defineExpose({
                                         apiConfig.provider = key;
                                         changeProvider();
                                     "
-                                    class="p-2 rounded-xl border text-center flex flex-col items-center gap-1 transition-all"
+                                    class="w-full p-3 rounded-xl border text-left flex items-start gap-3 transition-all hover:shadow-md relative overflow-hidden group"
                                     :class="
                                         apiConfig.provider === key
-                                            ? 'border-cozy-primary bg-cozy-primary/5 text-cozy-primary'
-                                            : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                                            ? 'border-cozy-primary bg-cozy-primary/5 ring-1 ring-cozy-primary'
+                                            : 'border-gray-200 bg-white hover:bg-gray-50'
                                     "
                                 >
-                                    <component :is="val.icon" class="w-4 h-4" />
-                                    <span class="text-[10px] font-bold">{{
-                                        val.name
-                                    }}</span>
+                                    <div
+                                        class="p-2 rounded-lg shrink-0 mt-1 transition-colors"
+                                        :class="
+                                            apiConfig.provider === key
+                                                ? 'bg-white shadow-sm'
+                                                : 'bg-gray-100'
+                                        "
+                                    >
+                                        <component
+                                            :is="val.icon"
+                                            class="w-5 h-5"
+                                            :class="
+                                                apiConfig.provider === key
+                                                    ? 'text-cozy-primary'
+                                                    : 'text-gray-400'
+                                            "
+                                        />
+                                    </div>
+
+                                    <div class="flex-1">
+                                        <div
+                                            class="flex items-center gap-2 mb-0.5"
+                                        >
+                                            <span
+                                                class="text-sm font-bold text-cozy-text"
+                                                >{{ val.name }}</span
+                                            >
+                                            <span
+                                                class="text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide"
+                                                :class="val.tagColor"
+                                                >{{ val.tag }}</span
+                                            >
+                                        </div>
+                                        <p
+                                            class="text-[10px] text-cozy-muted leading-relaxed pr-2"
+                                        >
+                                            {{ val.desc }}
+                                        </p>
+                                    </div>
+
+                                    <div
+                                        v-if="apiConfig.provider === key"
+                                        class="absolute top-2 right-2"
+                                    >
+                                        <Check
+                                            class="w-4 h-4 text-cozy-primary"
+                                        />
+                                    </div>
                                 </button>
                             </div>
                         </div>
 
                         <div>
                             <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 flex items-center gap-1"
-                                ><Bot class="w-3 h-3" /> Model</label
+                                class="text-[10px] font-bold text-cozy-muted uppercase mb-3 flex items-center gap-1 tracking-wider"
+                                ><Sliders class="w-3 h-3" /> Tingkat
+                                Kreativitas</label
                             >
-                            <select
-                                v-model="apiConfig.model"
-                                class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:border-cozy-primary outline-none"
+                            <div
+                                class="bg-white p-4 rounded-xl border border-gray-200"
                             >
-                                <option
-                                    v-for="m in providers[apiConfig.provider]
-                                        .models"
-                                    :key="m.id"
-                                    :value="m.id"
+                                <div
+                                    class="flex justify-between items-end mb-2"
                                 >
-                                    {{ m.name }}
-                                </option>
-                            </select>
+                                    <span
+                                        class="text-xs font-bold transition-colors"
+                                        :class="tempLabel.color"
+                                        >{{ tempLabel.text }}</span
+                                    >
+                                    <span
+                                        class="text-[10px] font-mono text-gray-400 bg-gray-100 px-1.5 rounded"
+                                        >{{ apiConfig.temperature }}</span
+                                    >
+                                </div>
+                                <input
+                                    type="range"
+                                    v-model="apiConfig.temperature"
+                                    min="0"
+                                    max="1"
+                                    step="0.1"
+                                    class="w-full h-2 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-cozy-primary mb-2"
+                                />
+                                <p
+                                    class="text-[10px] text-cozy-muted italic flex gap-1.5 items-start"
+                                >
+                                    <Info class="w-3 h-3 shrink-0 mt-0.5" />
+                                    {{ tempLabel.desc }}
+                                </p>
+                            </div>
                         </div>
 
-                        <div>
+                        <div v-if="apiConfig.provider !== 'hybrid'">
                             <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 flex items-center gap-1"
-                                ><Key class="w-3 h-3" /> Custom API Key
-                                (Optional)</label
+                                class="text-[10px] font-bold text-cozy-muted uppercase mb-3 flex items-center gap-1 tracking-wider"
+                                ><Key class="w-3 h-3" /> Kunci API</label
                             >
-                            <input
-                                v-model="apiConfig.apiKey"
-                                type="password"
-                                placeholder="Paste API Key..."
-                                class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:border-cozy-primary outline-none font-mono text-gray-600"
-                            />
-                            <p class="text-[9px] text-gray-400 mt-1">
-                                *Kosongkan untuk pakai kuota gratis.
+                            <div
+                                class="bg-gray-50 p-1 rounded-xl border border-gray-200"
+                            >
+                                <select
+                                    v-model="
+                                        apiConfig.keyPrefs[apiConfig.provider]
+                                    "
+                                    class="w-full p-2.5 bg-white border-none rounded-lg text-xs outline-none focus:ring-2 focus:ring-cozy-primary/20 transition-all font-mono text-cozy-text shadow-sm"
+                                >
+                                    <option value="auto">
+                                        ⚡ Auto-Switch (Recommended)
+                                    </option>
+                                    <option
+                                        v-for="(k, idx) in availableKeys[
+                                            apiConfig.provider
+                                        ]"
+                                        :key="idx"
+                                        :value="idx"
+                                    >
+                                        Key {{ idx + 1 }} ({{
+                                            getKeyOptionLabel(k)
+                                        }})
+                                    </option>
+                                </select>
+                            </div>
+                            <p class="text-[9px] text-gray-400 mt-2 ml-1">
+                                *Auto-Switch akan otomatis mengganti kunci jika
+                                limit harian habis.
                             </p>
                         </div>
-
-                        <div>
-                            <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 flex items-center gap-1"
-                                ><Sliders class="w-3 h-3" /> Kreativitas:
-                                {{ apiConfig.temperature }}</label
-                            >
-                            <input
-                                type="range"
-                                v-model="apiConfig.temperature"
-                                min="0"
-                                max="1"
-                                step="0.1"
-                                class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-cozy-primary"
-                            />
-                        </div>
                     </div>
-                    <div class="mt-6 flex flex-col gap-2">
+
+                    <div
+                        class="mt-4 pt-4 border-t border-gray-100 shrink-0 flex flex-col gap-2"
+                    >
                         <button
                             @click="saveSettings"
-                            class="w-full py-3 bg-cozy-primary text-white rounded-xl font-bold text-xs shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all flex items-center justify-center gap-2"
+                            class="w-full py-3 bg-cozy-primary text-white rounded-xl font-bold text-xs shadow-lg hover:bg-cozy-accent transition-all flex items-center justify-center gap-2"
                         >
-                            <Save class="w-4 h-4" /> Simpan
+                            <Save class="w-4 h-4" /> Simpan Pengaturan
                         </button>
                         <button
                             @click="resetSettings"
-                            class="w-full py-3 text-red-400 hover:text-red-600 font-bold text-xs flex items-center justify-center gap-2"
+                            class="w-full py-2 text-red-400 hover:text-red-600 font-bold text-[10px] flex items-center justify-center gap-1"
                         >
-                            <Trash2 class="w-4 h-4" /> Reset
+                            Reset ke Default
                         </button>
                     </div>
                 </div>
 
                 <div
-                    ref="chatContainer"
-                    class="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/30"
+                    v-if="showPatientForm"
+                    class="absolute inset-0 z-20 bg-white flex flex-col p-6 animate-in fade-in slide-in-from-bottom-4 top-[80px]"
                 >
-                    <div
-                        v-for="(msg, index) in messages"
-                        :key="index"
-                        class="flex gap-3"
-                        :class="msg.role === 'user' ? 'flex-row-reverse' : ''"
-                    >
-                        <div
-                            class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm border transition-colors"
-                            :class="
-                                msg.role === 'user'
-                                    ? 'bg-white border-gray-100'
-                                    : 'bg-white ' +
-                                      (personas[activePersona]?.color ||
-                                          'text-gray-500')
-                            "
+                    <div class="flex justify-between items-center mb-4">
+                        <h3
+                            class="font-bold text-cozy-text text-lg flex items-center gap-2"
                         >
-                            <User
-                                v-if="msg.role === 'user'"
-                                class="w-4 h-4 text-gray-600"
-                            />
-                            <component
-                                v-else
-                                :is="personas[activePersona]?.icon || Bot"
-                                class="w-4 h-4"
-                            />
-                        </div>
-                        <div
-                            class="max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed shadow-sm prose-content"
-                            :class="
-                                msg.role === 'user'
-                                    ? 'bg-white text-gray-700 rounded-tr-none border border-gray-100'
-                                    : 'bg-cozy-card text-cozy-text rounded-tl-none border border-cozy-border'
-                            "
-                            v-html="marked.parse(msg.text)"
-                        ></div>
-                    </div>
-                    <div v-if="isLoading" class="flex gap-3">
-                        <div
-                            class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center animate-pulse"
-                        >
-                            <Sparkles class="w-4 h-4 text-gray-400" />
-                        </div>
-                        <div
-                            class="bg-gray-100/50 p-3 rounded-2xl rounded-tl-none text-xs text-gray-500 italic flex items-center gap-2"
-                        >
-                            <Loader2 class="w-3 h-3 animate-spin" /> Mengetik...
-                        </div>
-                    </div>
-                </div>
-
-                <div class="p-3 bg-white border-t border-gray-100 shrink-0">
-                    <form @submit.prevent="sendMessage" class="relative">
-                        <input
-                            v-model="inputMessage"
-                            type="text"
-                            placeholder="Ketik pesan..."
-                            class="w-full pl-4 pr-12 py-3 bg-gray-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-cozy-primary/20 outline-none transition-all placeholder:text-gray-400 font-medium"
-                        />
+                            <Stethoscope class="w-5 h-5 text-green-500" /> Data
+                            Pasien
+                        </h3>
                         <button
-                            type="submit"
-                            :disabled="!inputMessage || isLoading"
-                            class="absolute right-2 top-2 p-1.5 bg-cozy-primary text-white rounded-lg hover:bg-cozy-accent transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
+                            @click="generateRandomPatient"
+                            class="text-[10px] font-bold text-cozy-primary bg-cozy-primary/10 px-3 py-1.5 rounded-lg hover:bg-cozy-primary/20 transition-all flex items-center gap-1.5 animate-pulse"
                         >
-                            <Send class="w-4 h-4" />
+                            <Dice5 class="w-3.5 h-3.5" /> Auto Isi
                         </button>
-                    </form>
+                    </div>
+
+                    <div class="space-y-4 flex-1">
+                        <input
+                            v-model="patientData.name"
+                            type="text"
+                            placeholder="Nama Pasien"
+                            class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-green-500 text-cozy-text transition-all"
+                        />
+                        <input
+                            v-model="patientData.age"
+                            type="text"
+                            placeholder="Usia"
+                            class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-green-500 text-cozy-text transition-all"
+                        />
+                        <textarea
+                            v-model="patientData.complaint"
+                            rows="4"
+                            placeholder="Keluhan utama..."
+                            class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-green-500 resize-none text-cozy-text transition-all"
+                        ></textarea>
+                    </div>
+                    <div class="flex gap-2 mt-4">
+                        <button
+                            @click="showPatientForm = false"
+                            class="flex-1 py-3 text-gray-400 text-xs font-bold hover:bg-gray-50 rounded-xl"
+                        >
+                            Batal
+                        </button>
+                        <button
+                            @click="startPatientRoleplay"
+                            :disabled="!patientData.complaint"
+                            class="flex-[2] py-3 bg-green-500 text-white text-xs font-bold rounded-xl shadow-lg hover:bg-green-600 transition-all"
+                        >
+                            Mulai Sesi
+                        </button>
+                    </div>
                 </div>
             </div>
         </transition>
 
         <button
             @click="toggleChat"
-            class="group relative w-14 h-14 bg-cozy-card border border-cozy-border rounded-full shadow-xl flex items-center justify-center hover:scale-110 transition-all duration-300 pointer-events-auto"
+            class="group relative w-16 h-16 bg-cozy-card border border-cozy-border rounded-full shadow-xl flex items-center justify-center hover:scale-105 transition-all duration-300 pointer-events-auto hover:border-cozy-primary"
         >
-            <div
-                class="absolute inset-0 bg-cozy-primary/10 rounded-full animate-ping opacity-20 group-hover:opacity-0"
-            ></div>
+            <span
+                class="absolute inset-0 rounded-full bg-cozy-primary/10 animate-ping opacity-20 group-hover:opacity-0"
+            ></span>
             <transition name="rotate">
                 <component
                     v-if="!isOpen"
                     :is="personas[activePersona].icon"
-                    class="w-6 h-6 text-cozy-primary absolute"
+                    class="w-7 h-7 text-cozy-primary absolute"
                 />
-                <X v-else class="w-6 h-6 text-cozy-muted absolute" />
+                <X v-else class="w-7 h-7 text-cozy-muted absolute" />
             </transition>
         </button>
     </div>
 </template>
 
 <style scoped>
+/* ANIMATIONS */
 .scale-up-enter-active,
 .scale-up-leave-active {
     transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
@@ -746,26 +950,87 @@ defineExpose({
     opacity: 0;
     transform: translateY(20px) scale(0.95);
 }
-.no-scrollbar::-webkit-scrollbar {
-    display: none;
+.rotate-enter-active,
+.rotate-leave-active {
+    transition: all 0.3s ease;
 }
-.no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+.rotate-enter-from,
+.rotate-leave-to {
+    opacity: 0;
+    transform: rotate(90deg) scale(0.5);
 }
-.prose-content :deep(p) {
+.animate-spin-slow {
+    animation: spin 3s linear infinite;
+}
+
+/* CUSTOM SCROLLBAR */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.1);
+    border-radius: 10px;
+}
+
+/* MARKDOWN STYLING */
+.prose {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+.prose :deep(p) {
     margin-bottom: 0.5em;
 }
-.prose-content :deep(strong) {
+.prose :deep(strong) {
     font-weight: 700;
     color: inherit;
 }
-.prose-content :deep(ul) {
-    list-style: disc;
+.prose :deep(ul),
+.prose :deep(ol) {
     padding-left: 1.2em;
+    margin-bottom: 0.5em;
 }
-.prose-content :deep(ol) {
-    list-style: decimal;
-    padding-left: 1.2em;
+.prose :deep(ul) {
+    list-style-type: disc;
+}
+.prose :deep(ol) {
+    list-style-type: decimal;
+}
+
+/* CODE BLOCK */
+.prose :deep(pre) {
+    background-color: rgba(0, 0, 0, 0.05);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    overflow-x: auto;
+    font-family: monospace;
+    font-size: 0.8em;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+    max-width: 100%;
+    white-space: pre;
+}
+.prose-invert :deep(pre) {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+.prose :deep(code) {
+    background-color: rgba(0, 0, 0, 0.05);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.25rem;
+    font-family: monospace;
+    font-size: 0.85em;
+}
+.prose-invert :deep(code) {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+.prose :deep(pre) :deep(code) {
+    background-color: transparent;
+    padding: 0;
 }
 </style>
