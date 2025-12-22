@@ -45,7 +45,7 @@ const toggleCard = (id) => {
     const newSet = new Set(revealedCards.value);
     if (newSet.has(id)) newSet.delete(id);
     else {
-        newSet.clear(); // Mode fokus: tutup kartu lain saat buka satu
+        newSet.clear();
         newSet.add(id);
     }
     revealedCards.value = newSet;
@@ -69,17 +69,18 @@ const filteredQuestions = computed(() => {
 </script>
 
 <template>
-    <div class="min-h-screen bg-cozy-bg pb-20 font-sans text-cozy-text">
+    <div
+        class="min-h-screen bg-cozy-bg pb-20 font-sans text-cozy-text transition-colors duration-300"
+    >
+        <!-- Sticky Header (FIXED: bg-white -> bg-cozy-card) -->
         <div
-            class="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-cozy-border px-4 py-3 md:px-6 md:py-4 flex items-center gap-4 transition-all"
+            class="sticky top-0 z-40 bg-cozy-card/80 backdrop-blur-md border-b border-cozy-border px-4 py-3 md:px-6 md:py-4 flex items-center gap-4 transition-all shadow-sm"
         >
             <button
                 @click="goBack"
-                class="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors group"
+                class="p-2 -ml-2 hover:bg-cozy-bg rounded-full transition-colors group text-cozy-muted hover:text-cozy-primary"
             >
-                <ArrowLeft
-                    class="w-5 h-5 text-cozy-muted group-hover:text-cozy-primary"
-                />
+                <ArrowLeft class="w-5 h-5" />
             </button>
             <div class="flex-1 min-w-0">
                 <h1
@@ -91,6 +92,7 @@ const filteredQuestions = computed(() => {
                     {{ questions.length }} Kartu Pembelajaran
                 </p>
             </div>
+            <!-- Search dalam folder -->
             <div class="relative w-32 md:w-48">
                 <Search
                     class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cozy-muted"
@@ -99,7 +101,7 @@ const filteredQuestions = computed(() => {
                     v-model="searchQuery"
                     type="text"
                     placeholder="Cari..."
-                    class="w-full pl-8 pr-3 py-1.5 bg-cozy-bg border border-cozy-border rounded-full text-xs font-bold focus:border-cozy-primary outline-none transition-all"
+                    class="w-full pl-8 pr-3 py-1.5 bg-cozy-bg border border-cozy-border rounded-full text-xs font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all placeholder:text-cozy-muted/50"
                 />
             </div>
         </div>
@@ -117,21 +119,22 @@ const filteredQuestions = computed(() => {
             </div>
 
             <div v-else-if="questions.length > 0">
+                <!-- Info Banner (Transparansi agar cocok di dark mode) -->
                 <div
                     v-if="!searchQuery"
-                    class="mb-8 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-[24px] border border-blue-100 flex flex-col md:flex-row items-center gap-4 text-center md:text-left"
+                    class="mb-8 p-6 bg-cozy-primary/5 rounded-[24px] border border-cozy-primary/10 flex flex-col md:flex-row items-center gap-4 text-center md:text-left"
                 >
                     <div
-                        class="bg-white p-3 rounded-2xl shadow-sm text-blue-500 shrink-0 rotate-3"
+                        class="bg-cozy-card p-3 rounded-2xl shadow-sm text-cozy-primary shrink-0 rotate-3 border border-cozy-border"
                     >
                         <FolderOpen class="w-8 h-8" />
                     </div>
                     <div class="flex-1">
-                        <h2 class="font-bold text-blue-900 text-lg">
+                        <h2 class="font-bold text-cozy-text text-lg">
                             Ruang Belajar
                         </h2>
                         <p
-                            class="text-sm text-blue-700/80 leading-relaxed max-w-xl"
+                            class="text-sm text-cozy-muted leading-relaxed max-w-xl"
                         >
                             Selamat belajar! Klik kartu untuk melihat jawaban.
                             Gunakan fitur "Tanya AI" jika ada penjelasan yang
@@ -149,6 +152,7 @@ const filteredQuestions = computed(() => {
                     </p>
                 </div>
 
+                <!-- Grid Kartu -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
                     <QuestionCard
                         v-for="q in filteredQuestions"

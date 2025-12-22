@@ -15,7 +15,7 @@ defineEmits(["confirm", "close"]);
     <transition name="modal">
         <div
             v-if="isOpen"
-            class="fixed inset-0 z-[99999] flex items-center justify-center px-4 font-sans"
+            class="fixed inset-0 z-[99999] flex items-center justify-center px-4 font-sans text-cozy-text"
         >
             <div
                 class="absolute inset-0 bg-black/20 backdrop-blur-sm transition-opacity"
@@ -23,32 +23,30 @@ defineEmits(["confirm", "close"]);
             ></div>
 
             <div
-                class="relative bg-white/90 backdrop-blur-xl border border-white/20 w-full max-w-[320px] rounded-[24px] shadow-2xl overflow-hidden transform transition-all animate-pop-in"
+                class="relative bg-cozy-card backdrop-blur-xl border border-cozy-border w-full max-w-[320px] rounded-[24px] shadow-2xl overflow-hidden transform transition-all animate-pop-in"
             >
                 <div class="p-6 text-center">
-                    <h3
-                        class="text-lg font-bold text-gray-800 mb-2 leading-snug"
-                    >
+                    <h3 class="text-lg font-bold mb-2 leading-snug">
                         {{ title }}
                     </h3>
-                    <p class="text-sm text-gray-500 leading-relaxed">
+                    <p class="text-sm text-cozy-muted leading-relaxed">
                         {{ message }}
                     </p>
                 </div>
 
                 <div
-                    class="grid grid-cols-2 border-t border-gray-100 divide-x divide-gray-100 bg-gray-50/50"
+                    class="grid grid-cols-2 border-t border-cozy-border divide-x divide-cozy-border bg-cozy-bg/50"
                 >
                     <button
                         @click="$emit('close')"
-                        class="py-4 text-sm font-bold text-gray-500 hover:bg-gray-100 active:bg-gray-200 transition-colors"
+                        class="py-4 text-sm font-bold text-cozy-muted hover:bg-cozy-bg active:bg-cozy-border transition-colors"
                     >
                         {{ cancelText }}
                     </button>
                     <button
                         @click="$emit('confirm')"
-                        class="py-4 text-sm font-bold hover:bg-gray-100 active:bg-gray-200 transition-colors"
-                        :class="isDanger ? 'text-red-500' : 'text-blue-600'"
+                        class="py-4 text-sm font-bold hover:bg-cozy-bg active:bg-cozy-border transition-colors"
+                        :class="isDanger ? 'text-red-500' : 'text-cozy-primary'"
                     >
                         {{ confirmText }}
                     </button>

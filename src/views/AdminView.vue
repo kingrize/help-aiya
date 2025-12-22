@@ -47,7 +47,6 @@ import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
 import { useToast } from "../composables/useToast";
 
-// --- IMPORT PDF.JS (FIXED WORKER) ---
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -63,10 +62,8 @@ const isResetting = ref(false);
 const isGeneratingMaterial = ref(false);
 const showResetModal = ref(false);
 const showMaterialsModal = ref(false);
-// NEW: State untuk Modal Delete Course
 const showDeleteCourseModal = ref(false);
 const courseToDelete = ref(null);
-
 const existingCourses = ref([]);
 const isLoadingMaterials = ref(false);
 
@@ -119,7 +116,6 @@ const providers = {
     },
 };
 
-// --- LOAD API KEYS ---
 const apiKeys = { gemini: {}, groq: {}, aiml: {} };
 const loadKeys = (prefix, target, max) => {
     for (let i = 1; i <= max; i++) {
@@ -267,7 +263,6 @@ const uploadFileToGemini = async (file, apiKey) => {
     const fileUri = data.file.uri;
     const fileName = data.file.name;
 
-    // Polling
     let state = data.file.state;
     let attempts = 0;
     while (state === "PROCESSING") {
@@ -312,7 +307,6 @@ const callProviderApi = async (
     prompt,
     filePayload = null,
 ) => {
-    // GEMINI HANDLER
     if (providerName === "gemini") {
         const contents = { parts: [{ text: prompt }] };
         const generationConfig = { responseMimeType: "application/json" };
@@ -344,8 +338,6 @@ const callProviderApi = async (
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) throw new Error("AI Empty Response.");
         return text;
-
-        // GROQ & AIML HANDLER
     } else {
         const res = await fetch(
             providerName === "groq"
@@ -422,7 +414,7 @@ const tryProviderWithRotation = async (
     throw new Error(`All keys exhausted. Please check your API quota.`);
 };
 
-// --- CORE LOGIC (HYBRID) ---
+// --- CORE LOGIC ---
 const generateQuestions = async () => {
     const titleToUse =
         saveMode.value === "new"
@@ -442,8 +434,6 @@ const generateQuestions = async () => {
 
         if (pdfFile.value) {
             const fileSizeMB = pdfFile.value.size / (1024 * 1024);
-
-            // HYBRID SWITCHER
             if (fileSizeMB > 10) {
                 processingStage.value = "Big File Detected: Extracting Text...";
                 addToast(
@@ -467,7 +457,6 @@ const generateQuestions = async () => {
             }
         }
 
-        // PROMPT
         processingStage.value = `AI is crafting ${questionCount.value} questions...`;
 
         const constraint =
@@ -494,12 +483,9 @@ const generateQuestions = async () => {
             filePayload,
         );
 
-        // --- FIX: GROQ/AI JSON CLEANER ---
-        // Mencari [ pertama dan ] terakhir untuk mengambil JSON murni
-        // Ini mengatasi error "AI Output Malformed" jika AI bawel
+        // CLEAN JSON
         const firstBracket = result.indexOf("[");
         const lastBracket = result.lastIndexOf("]");
-
         if (firstBracket !== -1 && lastBracket !== -1) {
             result = result.substring(firstBracket, lastBracket + 1);
         } else {
@@ -522,7 +508,6 @@ const generateQuestions = async () => {
                 previewSection.value?.scrollIntoView({ behavior: "smooth" }),
             );
         } catch (jsonErr) {
-            console.error("Failed JSON:", result);
             throw new Error("AI Output Malformed (JSON Error).");
         }
     } catch (error) {
@@ -685,6 +670,7 @@ const formatDate = (ts) =>
     <div
         class="min-h-screen bg-cozy-bg text-cozy-text font-sans pb-32 transition-colors duration-300"
     >
+        <!-- MODALS -->
         <ConfirmModal
             :isOpen="showResetModal"
             title="Wipe Everything?"
@@ -705,6 +691,7 @@ const formatDate = (ts) =>
             :isDanger="true"
         />
 
+        <!-- MODAL LIBRARY -->
         <transition name="fade">
             <div
                 v-if="showMaterialsModal"
@@ -806,6 +793,7 @@ const formatDate = (ts) =>
             </div>
         </transition>
 
+        <!-- HEADER -->
         <header
             class="bg-cozy-card border-b border-cozy-border sticky top-0 z-30 shadow-sm backdrop-blur-xl bg-opacity-95"
         >
@@ -845,7 +833,7 @@ const formatDate = (ts) =>
                     </button>
                     <button
                         @click="handleLogout"
-                        class="btn-header text-red-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                        class="btn-header text-red-500 hover:bg-red-500/10 hover:text-red-600 hover:border-red-200"
                     >
                         <LogOut class="w-5 h-5" /><span class="hidden md:inline"
                             >Exit</span
@@ -858,7 +846,9 @@ const formatDate = (ts) =>
         <main
             class="max-w-7xl mx-auto px-6 md:px-8 py-10 grid grid-cols-1 lg:grid-cols-12 gap-10"
         >
+            <!-- SIDEBAR CONTROL -->
             <div class="lg:col-span-4 space-y-8">
+                <!-- 1. AI ENGINE STATUS -->
                 <div
                     class="bg-cozy-card border border-cozy-border rounded-[32px] p-8 shadow-sm relative overflow-hidden"
                 >
@@ -889,7 +879,7 @@ const formatDate = (ts) =>
                                 :class="
                                     currentProvider === key
                                         ? 'bg-cozy-primary text-white'
-                                        : 'bg-white text-cozy-muted group-hover:text-cozy-primary'
+                                        : 'bg-cozy-card text-cozy-muted group-hover:text-cozy-primary'
                                 "
                             >
                                 <component :is="prov.icon" class="w-5 h-5" />
@@ -905,7 +895,7 @@ const formatDate = (ts) =>
                                         :class="
                                             currentProvider === key
                                                 ? 'bg-cozy-primary text-white'
-                                                : 'bg-gray-100 text-gray-500'
+                                                : 'bg-cozy-card text-cozy-muted'
                                         "
                                         >{{ prov.tagline }}</span
                                     >
@@ -923,13 +913,14 @@ const formatDate = (ts) =>
                         <button
                             @click="openResetModal"
                             :disabled="isResetting"
-                            class="w-full py-3 flex items-center justify-center gap-2 text-red-500 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl text-sm font-bold transition-all opacity-80 hover:opacity-100"
+                            class="w-full py-3 flex items-center justify-center gap-2 text-red-500 bg-red-500/10 hover:bg-red-500/20 border border-red-200/30 rounded-xl text-sm font-bold transition-all opacity-80 hover:opacity-100"
                         >
                             <AlertTriangle class="w-4 h-4" /> Emergency Reset
                         </button>
                     </div>
                 </div>
 
+                <!-- 2. CONTENT CREATOR HUB -->
                 <div
                     class="bg-cozy-card border border-cozy-border rounded-[32px] p-8 shadow-sm sticky top-28"
                 >
@@ -941,6 +932,7 @@ const formatDate = (ts) =>
                     </h3>
 
                     <div class="space-y-6">
+                        <!-- MODE SWITCHER -->
                         <div
                             class="p-1.5 bg-cozy-bg border border-cozy-border rounded-2xl flex gap-1"
                         >
@@ -949,7 +941,7 @@ const formatDate = (ts) =>
                                 class="flex-1 py-3 text-xs font-bold rounded-xl transition-all"
                                 :class="
                                     saveMode === 'new'
-                                        ? 'bg-white shadow-sm text-cozy-primary ring-1 ring-cozy-border'
+                                        ? 'bg-cozy-card shadow-sm text-cozy-primary ring-1 ring-cozy-border'
                                         : 'text-cozy-muted hover:text-cozy-text'
                                 "
                             >
@@ -960,7 +952,7 @@ const formatDate = (ts) =>
                                 class="flex-1 py-3 text-xs font-bold rounded-xl transition-all"
                                 :class="
                                     saveMode === 'append'
-                                        ? 'bg-white shadow-sm text-cozy-primary ring-1 ring-cozy-border'
+                                        ? 'bg-cozy-card shadow-sm text-cozy-primary ring-1 ring-cozy-border'
                                         : 'text-cozy-muted hover:text-cozy-text'
                                 "
                             >
@@ -968,6 +960,7 @@ const formatDate = (ts) =>
                             </button>
                         </div>
 
+                        <!-- INPUT -->
                         <div>
                             <label
                                 class="text-xs font-bold text-cozy-muted uppercase mb-2 block ml-1 tracking-wider"
@@ -986,7 +979,7 @@ const formatDate = (ts) =>
                                         v-model="subjectTitle"
                                         type="text"
                                         placeholder="Ex: Biologi Sel"
-                                        class="w-full pl-12 pr-4 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all"
+                                        class="w-full pl-12 pr-4 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all placeholder:text-cozy-muted/50"
                                     />
                                 </div>
                                 <button
@@ -1032,6 +1025,7 @@ const formatDate = (ts) =>
                             </div>
                         </div>
 
+                        <!-- GENERATION MODE -->
                         <div>
                             <label
                                 class="text-xs font-bold text-cozy-muted uppercase mb-2 block ml-1 tracking-wider"
@@ -1043,7 +1037,7 @@ const formatDate = (ts) =>
                                     class="flex flex-col items-center justify-center p-3 rounded-xl border transition-all"
                                     :class="
                                         generationMode === 'hard'
-                                            ? 'bg-white shadow-sm border-cozy-text text-cozy-text ring-1 ring-cozy-border'
+                                            ? 'bg-cozy-card shadow-sm border-cozy-text text-cozy-text ring-1 ring-cozy-border'
                                             : 'bg-cozy-bg border-cozy-border text-cozy-muted hover:border-cozy-text/50'
                                     "
                                 >
@@ -1062,7 +1056,7 @@ const formatDate = (ts) =>
                                     class="flex flex-col items-center justify-center p-3 rounded-xl border transition-all"
                                     :class="
                                         generationMode === 'soft'
-                                            ? 'bg-white shadow-sm border-cozy-primary text-cozy-primary ring-1 ring-cozy-primary'
+                                            ? 'bg-cozy-card shadow-sm border-cozy-primary text-cozy-primary ring-1 ring-cozy-primary'
                                             : 'bg-cozy-bg border-cozy-border text-cozy-muted hover:border-cozy-primary/50'
                                     "
                                 >
@@ -1078,13 +1072,13 @@ const formatDate = (ts) =>
                                 </button>
                             </div>
                             <div
-                                class="mt-2 flex items-start gap-2 bg-blue-50 p-2 rounded-lg border border-blue-100"
+                                class="mt-2 flex items-start gap-2 bg-blue-500/10 p-2 rounded-lg border border-blue-500/20"
                             >
                                 <Info
                                     class="w-4 h-4 text-blue-500 shrink-0 mt-0.5"
                                 />
                                 <p
-                                    class="text-[10px] text-blue-700 leading-tight"
+                                    class="text-[10px] text-blue-600 leading-tight"
                                 >
                                     <span class="font-bold">Strict:</span>
                                     Anti-halusinasi, cocok untuk definisi
@@ -1095,6 +1089,7 @@ const formatDate = (ts) =>
                             </div>
                         </div>
 
+                        <!-- FILE UPLOAD -->
                         <div class="space-y-3">
                             <div class="flex justify-between items-center px-1">
                                 <label
@@ -1103,7 +1098,7 @@ const formatDate = (ts) =>
                                 >
                                 <span
                                     v-if="pdfFile"
-                                    class="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full flex items-center gap-1 animate-in fade-in"
+                                    class="text-[10px] font-bold text-green-600 bg-green-500/10 px-2 py-1 rounded-full flex items-center gap-1 animate-in fade-in"
                                     ><Check class="w-3 h-3" /> Ready to
                                     Cook</span
                                 >
@@ -1131,10 +1126,11 @@ const formatDate = (ts) =>
                                             ? 'border-cozy-primary bg-cozy-primary/10 scale-[1.01]'
                                             : 'border-cozy-border bg-cozy-bg',
                                         pdfFile
-                                            ? 'bg-green-50/50 border-green-200'
-                                            : 'group-hover:border-cozy-primary/50 group-hover:bg-white',
+                                            ? 'bg-green-500/10 border-green-500/30'
+                                            : 'group-hover:border-cozy-primary/50 group-hover:bg-cozy-card',
                                     ]"
                                 >
+                                    <!-- LOADING STATE -->
                                     <div
                                         v-if="isUploadingPdf"
                                         class="flex flex-col items-center animate-pulse"
@@ -1148,15 +1144,16 @@ const formatDate = (ts) =>
                                         >
                                     </div>
 
+                                    <!-- FILE READY -->
                                     <div
                                         v-else-if="pdfFile"
                                         class="relative w-full z-20"
                                     >
                                         <div
-                                            class="flex items-center gap-4 bg-white p-4 rounded-xl border border-green-100 shadow-sm text-left"
+                                            class="flex items-center gap-4 bg-cozy-card p-4 rounded-xl border border-green-500/20 shadow-sm text-left"
                                         >
                                             <div
-                                                class="p-3 bg-green-100 text-green-600 rounded-xl"
+                                                class="p-3 bg-green-500/10 text-green-600 rounded-xl"
                                             >
                                                 <FileText class="w-6 h-6" />
                                             </div>
@@ -1174,19 +1171,20 @@ const formatDate = (ts) =>
                                             </div>
                                             <button
                                                 @click.prevent="removeFile"
-                                                class="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                class="p-2 text-cozy-muted hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
                                             >
                                                 <X class="w-5 h-5" />
                                             </button>
                                         </div>
                                     </div>
 
+                                    <!-- EMPTY STATE -->
                                     <div
                                         v-else
                                         class="text-cozy-muted group-hover:text-cozy-primary transition-colors flex flex-col items-center"
                                     >
                                         <div
-                                            class="p-3 bg-white rounded-full shadow-sm mb-2 group-hover:scale-110 transition-transform"
+                                            class="p-3 bg-cozy-card rounded-full shadow-sm mb-2 group-hover:scale-110 transition-transform"
                                         >
                                             <UploadCloud
                                                 class="w-6 h-6"
@@ -1223,10 +1221,11 @@ const formatDate = (ts) =>
                                 v-model="rawMaterial"
                                 rows="3"
                                 placeholder="Paste manual text material here if you don't have a PDF..."
-                                class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-sm leading-relaxed text-cozy-text focus:border-cozy-primary outline-none resize-none transition-all placeholder:text-gray-400"
+                                class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-sm leading-relaxed text-cozy-text focus:border-cozy-primary outline-none resize-none transition-all placeholder:text-cozy-muted/50"
                             ></textarea>
                         </div>
 
+                        <!-- SLIDER -->
                         <div
                             class="bg-cozy-bg rounded-xl p-4 border border-cozy-border flex items-center gap-4"
                         >
@@ -1244,6 +1243,7 @@ const formatDate = (ts) =>
                             />
                         </div>
 
+                        <!-- GENERATE BUTTON -->
                         <button
                             @click="generateQuestions"
                             :disabled="isLoading || (!rawMaterial && !pdfFile)"
@@ -1268,6 +1268,7 @@ const formatDate = (ts) =>
                 </div>
             </div>
 
+            <!-- PREVIEW AREA -->
             <div class="lg:col-span-8" ref="previewSection">
                 <div class="flex justify-between items-center mb-6 px-2">
                     <h3
@@ -1283,7 +1284,7 @@ const formatDate = (ts) =>
                         v-if="generatedQuestions.length"
                         @click="saveToDatabase"
                         :disabled="isSaving"
-                        class="text-sm font-bold text-cozy-primary bg-white border border-cozy-border hover:border-cozy-primary hover:bg-cozy-primary/5 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2"
+                        class="text-sm font-bold text-cozy-primary bg-cozy-card border border-cozy-border hover:border-cozy-primary hover:bg-cozy-primary/5 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2"
                     >
                         <Save class="w-4 h-4" />
                         {{ isSaving ? "Saving..." : "Save Everything" }}
@@ -1295,7 +1296,7 @@ const formatDate = (ts) =>
                     class="h-[600px] flex flex-col items-center justify-center text-center border-2 border-dashed border-cozy-border rounded-[32px] bg-cozy-bg/30"
                 >
                     <div
-                        class="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-6 shadow-sm"
+                        class="w-24 h-24 bg-cozy-card rounded-full flex items-center justify-center mb-6 shadow-sm"
                     >
                         <Sparkles class="w-10 h-10 text-cozy-muted" />
                     </div>
@@ -1314,6 +1315,7 @@ const formatDate = (ts) =>
                         :key="index"
                         class="relative group"
                     >
+                        <!-- EDIT MODE -->
                         <div
                             v-if="editingIndex === index"
                             class="bg-cozy-card border-2 border-cozy-primary/50 p-6 rounded-[24px] shadow-lg flex flex-col gap-4 animate-in zoom-in-95 h-full"
@@ -1326,13 +1328,13 @@ const formatDate = (ts) =>
                                 <div class="flex gap-2">
                                     <button
                                         @click="saveEdit(index)"
-                                        class="p-2 bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors"
+                                        class="p-2 bg-green-500/10 text-green-600 rounded-full hover:bg-green-500/20 transition-colors"
                                     >
                                         <Check class="w-4 h-4" />
                                     </button>
                                     <button
                                         @click="cancelEdit"
-                                        class="p-2 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
+                                        class="p-2 bg-red-500/10 text-red-600 rounded-full hover:bg-red-500/20 transition-colors"
                                     >
                                         <X class="w-4 h-4" />
                                     </button>
@@ -1358,19 +1360,20 @@ const formatDate = (ts) =>
                             ></textarea>
                         </div>
 
+                        <!-- DISPLAY MODE -->
                         <div v-else class="h-full relative">
                             <div
                                 class="absolute -top-3 -right-3 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
                             >
                                 <button
                                     @click="startEdit(index)"
-                                    class="p-2.5 bg-white text-cozy-primary border border-cozy-border rounded-full shadow-md hover:bg-cozy-primary hover:text-white transition-all scale-90 group-hover:scale-100"
+                                    class="p-2.5 bg-cozy-card text-cozy-primary border border-cozy-border rounded-full shadow-md hover:bg-cozy-primary hover:text-white transition-all scale-90 group-hover:scale-100"
                                 >
                                     <Pencil class="w-4 h-4" />
                                 </button>
                                 <button
                                     @click="removeDraft(index)"
-                                    class="p-2.5 bg-white text-red-400 border border-cozy-border rounded-full shadow-md hover:bg-red-500 hover:text-white transition-all scale-90 group-hover:scale-100"
+                                    class="p-2.5 bg-cozy-card text-red-400 border border-cozy-border rounded-full shadow-md hover:bg-red-500 hover:text-white transition-all scale-90 group-hover:scale-100"
                                 >
                                     <Trash2 class="w-4 h-4" />
                                 </button>
@@ -1384,6 +1387,7 @@ const formatDate = (ts) =>
                     </div>
                 </div>
 
+                <!-- MOBILE FAB -->
                 <div
                     v-if="generatedQuestions.length > 0"
                     class="fixed bottom-32 right-8 lg:hidden z-40"
@@ -1414,6 +1418,6 @@ const formatDate = (ts) =>
     }
 }
 .btn-header {
-    @apply flex items-center gap-2 px-4 py-2.5 bg-white border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-white transition-all shadow-sm;
+    @apply flex items-center gap-2 px-4 py-2.5 bg-cozy-card border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-white transition-all shadow-sm;
 }
 </style>

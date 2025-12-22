@@ -95,14 +95,16 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
 
 <template>
     <div
-        class="group relative rounded-[24px] p-6 cursor-pointer border transition-all duration-300 flex flex-col overflow-hidden bg-cozy-card shadow-sm h-full"
+        class="group relative rounded-[24px] p-6 cursor-pointer border transition-all duration-300 flex flex-col overflow-hidden shadow-sm h-full"
         :class="[
             isRevealed
-                ? 'bg-white border-cozy-primary/40 shadow-lg ring-1 ring-cozy-primary/10'
-                : 'border-transparent hover:border-cozy-border hover:shadow-md',
+                ? 'bg-cozy-card border-cozy-primary/40 shadow-lg ring-1 ring-cozy-primary/10'
+                : 'bg-cozy-card border-transparent hover:border-cozy-border hover:shadow-md',
         ]"
         @click="toggleCard"
     >
+        <!-- HAPUS bg-white di atas, GANTI DENGAN bg-cozy-card -->
+
         <div class="flex justify-between items-start mb-4 relative z-10">
             <div class="flex items-center gap-3 max-w-[80%]">
                 <div
@@ -257,5 +259,9 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
     list-style: disc;
     padding-left: 1.2em;
     margin-bottom: 0.8em;
+}
+/* Ensure text color follows variable */
+.prose-content {
+    color: var(--c-text);
 }
 </style>

@@ -1,10 +1,11 @@
 <script setup>
 import { ref, onMounted } from "vue";
-import { Palette, X, Plus, BookOpen, Check } from "lucide-vue-next";
+import { Palette, X, Plus, BookOpen, Check, Moon, Sun } from "lucide-vue-next";
 
 const isOpen = ref(false);
 const customColorInput = ref("#e68e8e");
 const activeMode = ref("cozy"); // 'cozy' or 'focus'
+const isDarkMode = ref(false);
 
 const presets = [
     { id: "rose", color: "#e68e8e", label: "Rose" },
@@ -12,7 +13,6 @@ const presets = [
     { id: "sky", color: "#8eace6", label: "Sky" },
 ];
 
-// --- LOGIC 1: SMART COZY (PASTEL GENERATOR) ---
 const hexToHSL = (H) => {
     let r = 0,
         g = 0,
@@ -50,56 +50,68 @@ const hexToHSL = (H) => {
 
 const applyCozyTheme = (hexColor) => {
     activeMode.value = "cozy";
+    customColorInput.value = hexColor;
     const { h } = hexToHSL(hexColor);
     const root = document.documentElement;
 
-    // Settingan Cozy: Background Tint Tipis, Text Soft Grey
-    root.style.setProperty("--c-bg", `hsl(${h}, 30%, 97%)`);
-    root.style.setProperty("--c-card", `rgba(255, 255, 255, 0.75)`);
-    root.style.setProperty("--c-text", `#4b5563`); // Gray 600
-    root.style.setProperty("--c-text-muted", `#6b7280`);
-
-    root.style.setProperty("--c-primary", `hsl(${h}, 60%, 75%)`);
-    root.style.setProperty("--c-secondary", `hsl(${h + 40}, 50%, 70%)`);
-    root.style.setProperty("--c-accent", `hsl(${h + 180}, 60%, 80%)`);
-
-    root.style.setProperty("--c-shadow", `hsla(${h}, 60%, 75%, 0.2)`);
-    root.style.setProperty("--c-border", `hsla(${h}, 30%, 80%, 0.5)`);
-
-    root.style.setProperty("--c-user-bg", `hsl(${h}, 65%, 70%)`);
-    root.style.setProperty("--c-user-text", `#ffffff`);
+    if (isDarkMode.value) {
+        // === MIDNIGHT PASTEL MODE ===
+        root.style.setProperty("--c-bg", `#0f172a`);
+        root.style.setProperty("--c-card", `rgba(30, 41, 59, 0.7)`);
+        root.style.setProperty("--c-text", `#e2e8f0`);
+        root.style.setProperty("--c-text-muted", `#94a3b8`);
+        root.style.setProperty("--c-border", `rgba(148, 163, 184, 0.15)`);
+        root.style.setProperty("--c-primary", `hsl(${h}, 70%, 75%)`);
+        root.style.setProperty("--c-secondary", `hsl(${h + 40}, 50%, 65%)`);
+        root.style.setProperty("--c-accent", `hsl(${h + 180}, 60%, 80%)`);
+        root.style.setProperty("--c-shadow", `hsla(${h}, 70%, 70%, 0.15)`);
+        root.style.setProperty("--c-user-bg", `hsl(${h}, 60%, 60%)`);
+        root.style.setProperty("--c-user-text", `#ffffff`);
+    } else {
+        // === COZY DAY MODE ===
+        root.style.setProperty("--c-bg", `hsl(${h}, 30%, 97%)`);
+        root.style.setProperty("--c-card", `rgba(255, 255, 255, 0.75)`);
+        root.style.setProperty("--c-text", `#4b5563`);
+        root.style.setProperty("--c-text-muted", `#6b7280`);
+        root.style.setProperty("--c-border", `hsla(${h}, 30%, 80%, 0.5)`);
+        root.style.setProperty("--c-primary", `hsl(${h}, 60%, 75%)`);
+        root.style.setProperty("--c-secondary", `hsl(${h + 40}, 50%, 70%)`);
+        root.style.setProperty("--c-accent", `hsl(${h + 180}, 60%, 80%)`);
+        root.style.setProperty("--c-shadow", `hsla(${h}, 60%, 75%, 0.2)`);
+        root.style.setProperty("--c-user-bg", `hsl(${h}, 65%, 70%)`);
+        root.style.setProperty("--c-user-text", `#ffffff`);
+    }
 
     localStorage.setItem("user-theme-mode", "cozy");
     localStorage.setItem("user-custom-color", hexColor);
+    localStorage.setItem("user-dark-mode", isDarkMode.value);
 };
 
-// --- LOGIC 2: FOCUS MODE (READING OPTIMIZED) ---
 const applyFocusMode = () => {
     activeMode.value = "focus";
     const root = document.documentElement;
-
-    // Settingan Focus: "Paper" style (Kontras Tinggi)
-    root.style.setProperty("--c-bg", `#fdfbf7`); // Warm Paper
-    root.style.setProperty("--c-card", `#ffffff`); // Solid White
-    root.style.setProperty("--c-text", `#111827`); // Ink Black (Gray 900)
-    root.style.setProperty("--c-text-muted", `#4b5563`); // Gray 600
-
-    root.style.setProperty("--c-primary", `#262626`); // Neutral Black
+    // Focus mode always light (Paper style)
+    root.style.setProperty("--c-bg", `#fdfbf7`);
+    root.style.setProperty("--c-card", `#ffffff`);
+    root.style.setProperty("--c-text", `#111827`);
+    root.style.setProperty("--c-text-muted", `#4b5563`);
+    root.style.setProperty("--c-primary", `#262626`);
     root.style.setProperty("--c-secondary", `#e5e5e5`);
     root.style.setProperty("--c-accent", `#d4d4d4`);
-
     root.style.setProperty("--c-shadow", `rgba(0, 0, 0, 0.05)`);
     root.style.setProperty("--c-border", `#e5e7eb`);
-
     root.style.setProperty("--c-user-bg", `#262626`);
     root.style.setProperty("--c-user-text", `#ffffff`);
-
     localStorage.setItem("user-theme-mode", "focus");
+};
+
+const toggleDarkMode = () => {
+    isDarkMode.value = !isDarkMode.value;
+    applyCozyTheme(customColorInput.value);
 };
 
 const handleCustomColor = (event) => {
     const color = event.target.value;
-    customColorInput.value = color;
     applyCozyTheme(color);
 };
 
@@ -110,8 +122,11 @@ const toggleMenu = () => {
 onMounted(() => {
     const savedMode = localStorage.getItem("user-theme-mode") || "cozy";
     const savedColor = localStorage.getItem("user-custom-color") || "#e68e8e";
+    const savedDark = localStorage.getItem("user-dark-mode") === "true";
 
+    isDarkMode.value = savedDark;
     customColorInput.value = savedColor;
+
     if (savedMode === "focus") applyFocusMode();
     else applyCozyTheme(savedColor);
 });
@@ -121,15 +136,15 @@ onMounted(() => {
     <div class="fixed bottom-6 left-6 z-[9990] font-sans flex items-end gap-3">
         <button
             @click="toggleMenu"
-            class="w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all duration-500 z-50 relative overflow-hidden group border border-white/50"
+            class="w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-all duration-500 z-50 relative overflow-hidden group border-2 border-white/30 backdrop-blur-sm"
             :class="
                 isOpen
-                    ? 'bg-cozy-text text-white rotate-90'
-                    : 'bg-cozy-card text-cozy-text hover:scale-110'
+                    ? 'bg-cozy-text text-cozy-bg rotate-90 scale-110'
+                    : 'bg-cozy-card text-cozy-text hover:scale-110 hover:border-cozy-primary'
             "
         >
             <div
-                class="absolute inset-0 bg-cozy-primary opacity-20 group-hover:opacity-100 transition-opacity duration-500"
+                class="absolute inset-0 bg-cozy-primary opacity-0 group-hover:opacity-20 transition-opacity duration-500"
             ></div>
             <X v-if="isOpen" class="w-6 h-6 relative z-10" />
             <Palette v-else class="w-6 h-6 relative z-10" />
@@ -144,52 +159,66 @@ onMounted(() => {
             "
         >
             <div
-                class="bg-cozy-card/90 backdrop-blur-md border border-cozy-border p-2 rounded-full shadow-xl flex items-center gap-2"
+                class="bg-cozy-card/95 backdrop-blur-xl border border-cozy-border p-2.5 rounded-full shadow-2xl flex items-center gap-3 ring-1 ring-black/5"
             >
-                <button
-                    v-for="preset in presets"
-                    :key="preset.id"
-                    @click="applyCozyTheme(preset.color)"
-                    class="relative w-8 h-8 rounded-full border-2 border-white/50 hover:scale-110 transition-transform duration-300 flex items-center justify-center"
-                    :style="{ backgroundColor: preset.color }"
-                >
-                    <Check
-                        v-if="
-                            activeMode === 'cozy' &&
-                            customColorInput === preset.color
-                        "
-                        class="w-4 h-4 text-white drop-shadow-md"
-                        stroke-width="3"
-                    />
-                </button>
-
-                <div class="relative group">
+                <div class="flex items-center gap-2">
                     <button
-                        class="w-8 h-8 rounded-full bg-gradient-to-tr from-pink-300 via-purple-300 to-blue-300 border-2 border-white/50 flex items-center justify-center hover:rotate-90 transition-all duration-500 shadow-sm"
+                        v-for="preset in presets"
+                        :key="preset.id"
+                        @click="applyCozyTheme(preset.color)"
+                        class="relative w-9 h-9 rounded-full border border-white/20 hover:scale-110 transition-transform duration-300 flex items-center justify-center shadow-sm"
+                        :style="{ backgroundColor: preset.color }"
                     >
-                        <Plus class="w-4 h-4 text-white drop-shadow-md" />
+                        <Check
+                            v-if="
+                                activeMode === 'cozy' &&
+                                customColorInput === preset.color
+                            "
+                            class="w-5 h-5 text-white drop-shadow-md"
+                            stroke-width="3"
+                        />
                     </button>
-                    <input
-                        type="color"
-                        class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                        :value="customColorInput"
-                        @input="handleCustomColor"
-                    />
+                    <div class="relative group">
+                        <button
+                            class="w-9 h-9 rounded-full bg-gradient-to-tr from-pink-300 via-purple-300 to-blue-300 border border-white/20 flex items-center justify-center hover:rotate-90 transition-all duration-500 shadow-sm"
+                        >
+                            <Plus class="w-5 h-5 text-white drop-shadow-md" />
+                        </button>
+                        <input
+                            type="color"
+                            class="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                            :value="customColorInput"
+                            @input="handleCustomColor"
+                        />
+                    </div>
                 </div>
-
-                <div class="w-px h-6 bg-cozy-border mx-1"></div>
-
+                <div class="w-px h-8 bg-cozy-border mx-1"></div>
+                <button
+                    @click="toggleDarkMode"
+                    class="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 border border-transparent hover:bg-cozy-bg"
+                    :class="
+                        isDarkMode
+                            ? 'text-yellow-400 bg-white/10'
+                            : 'text-slate-600'
+                    "
+                    title="Toggle Midnight Mode"
+                >
+                    <Moon
+                        v-if="!isDarkMode"
+                        class="w-5 h-5 fill-current opacity-80"
+                    /><Sun v-else class="w-5 h-5 fill-current" />
+                </button>
                 <button
                     @click="applyFocusMode"
-                    class="w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300 border-2"
+                    class="w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 border border-transparent"
                     :class="
                         activeMode === 'focus'
-                            ? 'bg-gray-800 text-white border-gray-600 scale-110'
-                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'
+                            ? 'bg-cozy-text text-cozy-bg shadow-inner'
+                            : 'text-cozy-text/70 hover:bg-cozy-bg'
                     "
                     title="Focus Mode"
                 >
-                    <BookOpen class="w-4 h-4" />
+                    <BookOpen class="w-5 h-5" />
                 </button>
             </div>
         </div>

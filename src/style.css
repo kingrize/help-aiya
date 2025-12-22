@@ -1,15 +1,13 @@
-/* File: src/style.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-    /* --- 1. DEFAULT COZY (Rose) --- */
-    /* Menggelapkan text color (sebelumnya #5d5d5d) agar lebih kontras */
+    /* --- DEFAULT COZY (Rose Day) --- */
     --c-bg: #fff8f3;
-    --c-card: rgba(255, 255, 255, 0.75); /* Sedikit lebih solid */
-    --c-text: #4b5563; /* Gray 600 - Lebih gelap/bacaable */
-    --c-text-muted: #6b7280; /* Gray 500 */
+    --c-card: rgba(255, 255, 255, 0.75);
+    --c-text: #4b5563;
+    --c-text-muted: #6b7280;
     --c-border: rgba(229, 231, 235, 0.6);
 
     --c-primary: #e68e8e;
