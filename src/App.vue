@@ -7,10 +7,12 @@ import ToastContainer from "./components/ToastContainer.vue"; // Import Baru
 
 const aiTutorRef = ref(null);
 
+// FUNGSI YANG DIPERBAIKI
 const triggerAiExplainer = (questionText) => {
     if (aiTutorRef.value) {
-        const prompt = `Jelaskan secara detail: "${questionText}".`;
-        aiTutorRef.value.handleExternalPrompt(prompt);
+        // Menggunakan 'openWithQuestion' agar sesuai dengan expose di AiTutor.vue
+        // Kita kirim teks aslinya, biarkan AiTutor yang membuat prompt "Jelaskan..."
+        aiTutorRef.value.openWithQuestion(questionText);
     }
 };
 
