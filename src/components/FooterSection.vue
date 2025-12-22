@@ -1,3 +1,14 @@
+<script setup>
+import { useRouter } from "vue-router";
+
+const router = useRouter();
+
+// Fungsi rahasia untuk navigasi ke halaman Admin
+const goToAdmin = () => {
+    router.push("/admin");
+};
+</script>
+
 <template>
     <footer
         class="w-full py-8 px-6 mt-12 border-t border-cozy-border bg-cozy-bg text-center relative z-10"
@@ -17,7 +28,14 @@
             <div
                 class="flex items-center gap-2 text-[10px] text-cozy-muted/60 font-bold"
             >
-                <span>&copy; {{ new Date().getFullYear() }} Help Aiya.</span>
+                <span>&copy; {{ new Date().getFullYear() }} </span>
+                <span
+                    @dblclick="goToAdmin"
+                    class="cursor-default select-none hover:text-cozy-primary transition-colors duration-300"
+                    title="Copyright"
+                >
+                    Help Aiya.
+                </span>
             </div>
         </div>
     </footer>
