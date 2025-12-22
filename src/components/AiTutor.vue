@@ -25,6 +25,9 @@ import {
     Lightbulb,
     RefreshCw,
     ChevronRight,
+    AlignLeft,
+    AlignJustify,
+    AlignCenter,
 } from "lucide-vue-next";
 
 // --- KONFIGURASI PROVIDER ---
@@ -38,6 +41,8 @@ const apiConfig = ref({
     provider: localStorage.getItem("user_ai_provider") || "hybrid",
     model: localStorage.getItem("user_ai_model") || "gemini-2.5-flash",
     temperature: parseFloat(localStorage.getItem("user_ai_temp") || 0.7),
+    // 1 = Singkat, 2 = Pas, 3 = Detail
+    length: parseInt(localStorage.getItem("user_ai_length") || 2),
     keyPrefs: JSON.parse(
         localStorage.getItem("user_ai_key_prefs") ||
             '{"gemini":"auto","groq":"auto","aiml":"auto"}',
@@ -48,51 +53,70 @@ const providers = {
     hybrid: {
         name: "Hybrid Auto",
         icon: Layers,
-        desc: "Otomatis pilih AI terbaik & tercepat.",
+        desc: "Otomatis pilih AI terbaik.",
         color: "text-emerald-600",
         bg: "bg-emerald-50",
     },
     gemini: {
         name: "Google Gemini",
         icon: Sparkles,
-        desc: "Seimbang antara kreatif & logis.",
+        desc: "Seimbang & Cepat.",
         color: "text-blue-600",
         bg: "bg-blue-50",
     },
     aiml: {
         name: "GPT-4o",
         icon: Cloud,
-        desc: "Kecerdasan tingkat tinggi.",
+        desc: "Kecerdasan tinggi.",
         color: "text-purple-600",
         bg: "bg-purple-50",
     },
     groq: {
         name: "Groq Llama 3",
         icon: Zap,
-        desc: "Respon super instan.",
+        desc: "Respon instan.",
         color: "text-orange-600",
         bg: "bg-orange-50",
     },
 };
 
-// --- KONFIGURASI PERSONA (DENGAN TEMA & QUICK STARTERS) ---
+// --- LOGIC PANJANG JAWABAN (SLIDER) ---
+const lengthSettings = {
+    1: {
+        label: "Singkat",
+        desc: "Padat & To-the-point",
+        prompt: "INSTRUKSI: Jawab dengan SANGAT RINGKAS. Langsung ke inti masalah. Maksimal 2-3 paragraf pendek.",
+    },
+    2: {
+        label: "Pas",
+        desc: "Penjelasan Seimbang",
+        prompt: "INSTRUKSI: Jawab dengan porsi SEIMBANG. Cukup jelas tapi tidak bertele-tele.",
+    },
+    3: {
+        label: "Detail",
+        desc: "Lengkap & Mendalam",
+        prompt: "INSTRUKSI: Jawab dengan LENGKAP dan MENDALAM. Jelaskan semua aspek penting secara rinci.",
+    },
+};
+
+// --- KONFIGURASI PERSONA ---
 const personas = {
     tutor: {
         id: "tutor",
         name: "Jiya",
         role: "Teman Belajar",
         icon: Smile,
-        theme: "pink", // Base theme color
+        theme: "pink",
         gradient: "from-pink-500 to-rose-400",
         lightBg: "bg-pink-50",
         textColor: "text-pink-600",
-        desc: "Jelasin materi susah jadi gampang pake analogi!",
-        basePrompt: `PERAN: "Jiya", teman belajar ceria. GAYA: Santai, gaul, emoji 🌟. INSTRUKSI: 1. Pakai analogi sederhana. 2. Jawaban poin-poin. 3. Akhiri dengan pertanyaan pancingan.`,
+        desc: "Jelasin materi susah jadi gampang!",
+        basePrompt: `PERAN: "Jiya", teman belajar ceria. GAYA: Santai, gaul, emoji 🌟. INSTRUKSI: 1. Pakai analogi sederhana. 2. Pecah jawaban jadi poin-poin agar enak dibaca.`,
         starters: [
-            "Jelasin konsep Vue Reactivity dong 🌟",
-            "Gimana cara styling CSS biar rapi?",
-            "Apa bedanya `ref` dan `reactive`?",
-            "Buatin analogi tentang API dong!",
+            "Jelasin Vue Reactivity 🌟",
+            "Cara CSS biar rapi?",
+            "Bedanya ref & reactive?",
+            "Analogi API dong!",
         ],
     },
     patient: {
@@ -104,12 +128,12 @@ const personas = {
         gradient: "from-emerald-500 to-teal-400",
         lightBg: "bg-emerald-50",
         textColor: "text-emerald-600",
-        desc: "Latihan anamnesa & diagnosa kasus klinis.",
-        basePrompt: null,
+        desc: "Latihan anamnesa klinis.",
+        basePrompt: null, // Dinamis
         starters: [
-            "Mulai simulasi pasien baru dong 🏥",
-            "Saya mau latihan diagnosa depresi.",
-            "Generate kasus pasien cemas.",
+            "Simulasi pasien baru 🏥",
+            "Latihan diagnosa depresi.",
+            "Kasus pasien cemas.",
         ],
     },
     examiner: {
@@ -121,12 +145,12 @@ const personas = {
         gradient: "from-violet-600 to-purple-500",
         lightBg: "bg-violet-50",
         textColor: "text-violet-600",
-        desc: "Mode serius. Siapkan mentalmu!",
-        basePrompt: `Anda Dosen Penguji. Gaya: Formal, Kritis, Tajam. Gunakan Socratic Method. Jangan beri jawaban, tapi tanya balik.`,
+        desc: "Mode serius. Siapkan mental!",
+        basePrompt: `Anda Dosen Penguji. Gaya: Formal, Kritis. Gunakan Socratic Method. Jangan beri jawaban langsung, tanya balik mahasiswa.`,
         starters: [
-            "Saya siap diuji materinya Prof! 🎓",
-            "Tes pemahaman saya tentang State Management.",
-            "Kritik struktur kodingan saya.",
+            "Saya siap diuji Prof! 🎓",
+            "Tes pemahaman State.",
+            "Kritik kodingan saya.",
         ],
     },
 };
@@ -159,20 +183,25 @@ const patientData = ref({ name: "", age: "", complaint: "" });
 const activeSystemPrompt = ref("");
 const isHovered = ref(false);
 
-// --- API LOGIC (Simplified for brevity but robust) ---
+// --- API LOGIC ---
 const fetchAI = async (provider, model, msgs, key, temp) => {
-    // Logic fetch sama seperti sebelumnya...
+    // Gabungkan Prompt Persona + Prompt Slider Panjang Jawaban
+    const finalSystemPrompt =
+        (activeSystemPrompt.value || "") +
+        "\n\n" +
+        lengthSettings[apiConfig.value.length].prompt;
+
     if (provider === "gemini") {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
         const contents = msgs.map((m) => ({
             role: m.role === "user" ? "user" : "model",
             parts: [{ text: m.text }],
         }));
-        if (activeSystemPrompt.value)
-            contents.unshift({
-                role: "user",
-                parts: [{ text: "SYSTEM: " + activeSystemPrompt.value }],
-            });
+        contents.unshift({
+            role: "user",
+            parts: [{ text: "SYSTEM PROMPT: " + finalSystemPrompt }],
+        });
+
         const res = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -193,11 +222,8 @@ const fetchAI = async (provider, model, msgs, key, temp) => {
             role: m.role === "model" ? "assistant" : "user",
             content: m.text,
         }));
-        if (activeSystemPrompt.value)
-            messages.unshift({
-                role: "system",
-                content: activeSystemPrompt.value,
-            });
+        messages.unshift({ role: "system", content: finalSystemPrompt });
+
         const res = await fetch(endpoint, {
             method: "POST",
             headers: {
@@ -213,7 +239,6 @@ const fetchAI = async (provider, model, msgs, key, temp) => {
 };
 
 const callAiApi = async (msgs) => {
-    // Hybrid Strategy Logic...
     const keys = availableKeys;
     const tryKey = async (p, m) => {
         let k = keys[p];
@@ -221,7 +246,6 @@ const callAiApi = async (msgs) => {
         const key = k[Math.floor(Math.random() * k.length)];
         return await fetchAI(p, m, msgs, key, apiConfig.value.temperature);
     };
-
     if (apiConfig.value.provider === "hybrid") {
         for (let s of [
             { p: "gemini", m: "gemini-2.5-flash" },
@@ -285,24 +309,20 @@ const setPersona = (id) => {
     }
     startSession(id, personas[id].basePrompt);
 };
-const startSession = (id, prompt, greeting) => {
+const startSession = (id, prompt) => {
     activeSystemPrompt.value = prompt;
     messages.value = [];
     showPatientForm.value = false;
-    // Greeting otomatis dihilangkan agar lebih bersih, kecuali mode tertentu
-    // Kita biarkan user memilih topik dari "Quick Starters"
 };
 const startPatientRoleplay = () => {
     if (!patientData.value.complaint) return;
     startSession(
         "patient",
         `PERAN: Pasien ${patientData.value.name}, ${patientData.value.age}, Sakit: ${patientData.value.complaint}`,
-        `Halo Dok..`,
     );
-    // Simulasi pesan pertama dari pasien
     messages.value.push({
         role: "model",
-        text: `(Masuk ruangan dengan wajah murung) "Permisi dok... nama saya ${patientData.value.name}..."`,
+        text: `(Masuk ruangan) "Permisi dok... nama saya ${patientData.value.name}..."`,
     });
 };
 const generateRandomPatient = () =>
@@ -311,15 +331,26 @@ const generateRandomPatient = () =>
     });
 const saveSettings = () => {
     localStorage.setItem("user_ai_provider", apiConfig.value.provider);
+    localStorage.setItem("user_ai_length", apiConfig.value.length);
     showSettings.value = false;
     playPop();
 };
 
+// --- EXPOSED METHOD (Dipanggil saat klik Tanya AI di Card) ---
 defineExpose({
     openWithQuestion: (q) => {
         if (!isOpen.value) toggleChat();
         setPersona("tutor");
-        setTimeout(() => sendMessage(`Jelaskan: ${q}`), 500);
+
+        // MODIFIKASI PROMPT OTOMATIS: Minta Analogi & Contoh
+        const enhancedPrompt =
+            `Tolong jelaskan materi ini: "${q}".\n\n` +
+            `👉 WAJIB SERTAKAN:\n` +
+            `1. ✨ **Analogi Sederhana** (supaya mudah dibayangkan).\n` +
+            `2. 📝 **Contoh Konkret** (kode/kasus nyata) jika relevan.\n` +
+            `Jelaskan dengan bahasa santai ya!`;
+
+        setTimeout(() => sendMessage(enhancedPrompt), 500);
     },
 });
 </script>
@@ -355,7 +386,6 @@ defineExpose({
                             >AI Tutor</span
                         >
                     </div>
-
                     <div
                         class="w-11 h-11 rounded-full flex items-center justify-center transition-all duration-500 relative shadow-inner"
                         :class="
@@ -410,7 +440,6 @@ defineExpose({
                                     class="w-5 h-5"
                                 />
                             </div>
-
                             <div>
                                 <div
                                     class="flex items-center gap-2 cursor-pointer group"
@@ -433,7 +462,6 @@ defineExpose({
                                 </p>
                             </div>
                         </div>
-
                         <button
                             @click="showSettings = !showSettings"
                             class="p-2 rounded-full hover:bg-gray-50 text-gray-400 hover:text-cozy-text transition-colors relative z-10"
@@ -520,7 +548,6 @@ defineExpose({
                             >
                                 {{ personas[activePersona].desc }}
                             </p>
-
                             <div class="w-full max-w-xs space-y-2">
                                 <button
                                     v-for="(q, idx) in personas[activePersona]
@@ -532,8 +559,7 @@ defineExpose({
                                     <span
                                         class="text-sm font-medium text-gray-600 group-hover:text-cozy-primary transition-colors"
                                         >{{ q }}</span
-                                    >
-                                    <ChevronRight
+                                    ><ChevronRight
                                         class="w-4 h-4 text-gray-300 group-hover:text-cozy-primary"
                                     />
                                 </button>
@@ -581,7 +607,6 @@ defineExpose({
                                 ></div>
                             </div>
                         </div>
-
                         <div
                             v-if="isLoading"
                             class="flex gap-3 items-center text-gray-400 text-xs italic pl-12 fade-in"
@@ -622,14 +647,6 @@ defineExpose({
                                 />
                             </button>
                         </form>
-                        <p
-                            class="text-[10px] text-center text-gray-300 mt-2 font-medium"
-                        >
-                            AI Powered by
-                            <span class="capitalize">{{
-                                apiConfig.provider
-                            }}</span>
-                        </p>
                     </div>
 
                     <div
@@ -650,7 +667,57 @@ defineExpose({
                                 <X class="w-5 h-5" />
                             </button>
                         </div>
-                        <div class="space-y-4 flex-1 overflow-y-auto pr-2">
+                        <div class="space-y-6 flex-1 overflow-y-auto pr-2">
+                            <div class="space-y-3">
+                                <label
+                                    class="text-xs font-bold text-gray-400 uppercase tracking-wider ml-1 flex items-center gap-1"
+                                >
+                                    <AlignLeft class="w-3.5 h-3.5" /> Panjang
+                                    Jawaban
+                                </label>
+                                <div
+                                    class="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm"
+                                >
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="3"
+                                        step="1"
+                                        v-model.number="apiConfig.length"
+                                        class="w-full h-2 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-cozy-primary"
+                                    />
+                                    <div class="flex justify-between mt-3">
+                                        <div
+                                            v-for="(v, k) in lengthSettings"
+                                            :key="k"
+                                            class="flex flex-col items-center cursor-pointer"
+                                            @click="
+                                                apiConfig.length = parseInt(k)
+                                            "
+                                        >
+                                            <span
+                                                class="text-xs font-bold transition-colors"
+                                                :class="
+                                                    apiConfig.length ===
+                                                    parseInt(k)
+                                                        ? 'text-cozy-primary'
+                                                        : 'text-gray-400'
+                                                "
+                                                >{{ v.label }}</span
+                                            >
+                                        </div>
+                                    </div>
+                                    <p
+                                        class="text-[11px] text-center text-gray-500 mt-3 bg-gray-50 py-2 rounded-lg border border-gray-100"
+                                    >
+                                        {{
+                                            lengthSettings[apiConfig.length]
+                                                .desc
+                                        }}
+                                    </p>
+                                </div>
+                            </div>
+
                             <div class="space-y-2">
                                 <label
                                     class="text-xs font-bold text-gray-400 uppercase tracking-wider ml-1"
@@ -728,8 +795,7 @@ defineExpose({
                                     v-model="patientData.name"
                                     placeholder="Nama"
                                     class="flex-1 p-3.5 bg-gray-50 rounded-xl text-sm border-transparent focus:bg-white focus:border-emerald-500 border outline-none transition-all"
-                                />
-                                <input
+                                /><input
                                     v-model="patientData.age"
                                     placeholder="Usia"
                                     class="w-24 p-3.5 bg-gray-50 rounded-xl text-sm border-transparent focus:bg-white focus:border-emerald-500 border outline-none transition-all"
@@ -741,7 +807,6 @@ defineExpose({
                                 rows="4"
                                 class="w-full p-3.5 bg-gray-50 rounded-xl text-sm border-transparent focus:bg-white focus:border-emerald-500 border outline-none transition-all resize-none"
                             ></textarea>
-
                             <button
                                 @click="generateRandomPatient"
                                 class="w-full py-2.5 bg-emerald-50 text-emerald-600 font-bold text-xs rounded-xl border border-emerald-100 border-dashed hover:bg-emerald-100 transition-colors flex items-center justify-center gap-2"
@@ -756,9 +821,8 @@ defineExpose({
                                 @click="showPatientForm = false"
                                 class="flex-1 py-3 text-gray-500 font-bold text-sm hover:bg-gray-50 rounded-xl transition-colors"
                             >
-                                Batal
-                            </button>
-                            <button
+                                Batal</button
+                            ><button
                                 @click="startPatientRoleplay"
                                 :disabled="!patientData.complaint"
                                 class="flex-[2] py-3 bg-emerald-500 text-white font-bold rounded-xl shadow-lg hover:bg-emerald-600 transition-all"
@@ -774,6 +838,7 @@ defineExpose({
 </template>
 
 <style scoped>
+/* Animations */
 .fade-enter-active,
 .fade-leave-active {
     transition: opacity 0.3s ease;
@@ -782,7 +847,6 @@ defineExpose({
 .fade-leave-to {
     opacity: 0;
 }
-
 .slide-up-enter-active,
 .slide-up-leave-active {
     transition: all 0.4s cubic-bezier(0.19, 1, 0.22, 1);
@@ -799,7 +863,6 @@ defineExpose({
         opacity: 0;
     }
 }
-
 .accordion-enter-active,
 .accordion-leave-active {
     transition: all 0.3s ease;
@@ -811,14 +874,12 @@ defineExpose({
     max-height: 0;
     opacity: 0;
 }
-
 .fade-in {
     animation: fadeIn 0.5s ease-out forwards;
 }
 .fade-in-up {
     animation: fadeInUp 0.4s ease-out forwards;
 }
-
 @keyframes fadeIn {
     from {
         opacity: 0;
@@ -837,7 +898,6 @@ defineExpose({
         transform: translateY(0);
     }
 }
-
 .pb-safe {
     padding-bottom: env(safe-area-inset-bottom, 20px);
 }
