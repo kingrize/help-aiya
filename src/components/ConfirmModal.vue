@@ -3,9 +3,9 @@ defineProps({
     isOpen: Boolean,
     title: String,
     message: String,
-    confirmText: { type: String, default: "Ya, Hapus" },
+    confirmText: { type: String, default: "Ya, Lanjutkan" },
     cancelText: { type: String, default: "Batal" },
-    isDanger: { type: Boolean, default: false }, // Jika true, teks jadi merah
+    isDanger: { type: Boolean, default: false },
 });
 
 defineEmits(["confirm", "close"]);
@@ -18,37 +18,37 @@ defineEmits(["confirm", "close"]);
             class="fixed inset-0 z-[99999] flex items-center justify-center px-4 font-sans"
         >
             <div
-                class="absolute inset-0 bg-black/30 backdrop-blur-[3px] transition-opacity"
+                class="absolute inset-0 bg-black/20 backdrop-blur-sm transition-opacity"
                 @click="$emit('close')"
             ></div>
 
             <div
-                class="relative bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl w-full max-w-[300px] rounded-[20px] shadow-2xl overflow-hidden transform transition-all animate-pop-in"
+                class="relative bg-white/90 backdrop-blur-xl border border-white/20 w-full max-w-[320px] rounded-[24px] shadow-2xl overflow-hidden transform transition-all animate-pop-in"
             >
                 <div class="p-6 text-center">
                     <h3
-                        class="text-[17px] font-bold text-cozy-text mb-2 leading-snug"
+                        class="text-lg font-bold text-gray-800 mb-2 leading-snug"
                     >
                         {{ title }}
                     </h3>
-                    <p class="text-[13px] text-cozy-muted leading-relaxed">
+                    <p class="text-sm text-gray-500 leading-relaxed">
                         {{ message }}
                     </p>
                 </div>
 
                 <div
-                    class="grid grid-cols-2 border-t border-gray-300/30 dark:border-gray-700/30 divide-x divide-gray-300/30 dark:divide-gray-700/30"
+                    class="grid grid-cols-2 border-t border-gray-100 divide-x divide-gray-100 bg-gray-50/50"
                 >
                     <button
                         @click="$emit('close')"
-                        class="py-3.5 text-[17px] font-normal text-blue-500 hover:bg-black/5 active:bg-black/10 transition-colors"
+                        class="py-4 text-sm font-bold text-gray-500 hover:bg-gray-100 active:bg-gray-200 transition-colors"
                     >
                         {{ cancelText }}
                     </button>
                     <button
                         @click="$emit('confirm')"
-                        class="py-3.5 text-[17px] font-semibold hover:bg-black/5 active:bg-black/10 transition-colors"
-                        :class="isDanger ? 'text-red-500' : 'text-blue-500'"
+                        class="py-4 text-sm font-bold hover:bg-gray-100 active:bg-gray-200 transition-colors"
+                        :class="isDanger ? 'text-red-500' : 'text-blue-600'"
                     >
                         {{ confirmText }}
                     </button>
@@ -59,11 +59,10 @@ defineEmits(["confirm", "close"]);
 </template>
 
 <style scoped>
-/* Animasi Pop-in ala iOS */
 @keyframes popIn {
     0% {
         opacity: 0;
-        transform: scale(1.1);
+        transform: scale(1.05);
     }
     100% {
         opacity: 1;
@@ -71,10 +70,8 @@ defineEmits(["confirm", "close"]);
     }
 }
 .animate-pop-in {
-    animation: popIn 0.2s ease-out forwards;
+    animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
-
-/* Transisi Vue untuk Backdrop */
 .modal-enter-active,
 .modal-leave-active {
     transition: opacity 0.2s ease;

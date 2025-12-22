@@ -11,6 +11,8 @@ import {
     doc,
     query,
     orderBy,
+    updateDoc,
+    arrayUnion,
 } from "firebase/firestore";
 import {
     LogOut,
@@ -20,7 +22,6 @@ import {
     BookOpen,
     Layers,
     Loader2,
-    Eraser,
     Zap,
     Settings2,
     Check,
@@ -40,15 +41,20 @@ import {
     Pencil,
     Home,
     AlertTriangle,
+    Info,
 } from "lucide-vue-next";
 import QuestionCard from "../components/QuestionCard.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
 import { useToast } from "../composables/useToast";
 
+// --- IMPORT PDF.JS (FIXED WORKER) ---
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
 const router = useRouter();
 const { addToast } = useToast();
-
-const DRAFT_KEY = "aiya_admin_draft_v2";
+const DRAFT_KEY = "aiya_admin_draft_v14_groqfix";
 
 // --- STATE UI ---
 const isLoading = ref(false);
@@ -57,13 +63,25 @@ const isResetting = ref(false);
 const isGeneratingMaterial = ref(false);
 const showResetModal = ref(false);
 const showMaterialsModal = ref(false);
+// NEW: State untuk Modal Delete Course
+const showDeleteCourseModal = ref(false);
+const courseToDelete = ref(null);
+
 const existingCourses = ref([]);
 const isLoadingMaterials = ref(false);
+
+// --- FILE STATE ---
 const pdfFile = ref(null);
 const pdfFileName = ref("");
+const pdfFileSize = ref("");
+const isUploadingPdf = ref(false);
 const processingStage = ref("");
 const previewSection = ref(null);
 const isDragging = ref(false);
+
+// --- STATE MODE SAVE ---
+const saveMode = ref("new");
+const selectedCourseId = ref("");
 
 // --- EDIT STATE ---
 const editingIndex = ref(null);
@@ -72,53 +90,55 @@ const tempEditData = ref({});
 // --- AI CONFIG ---
 const currentProvider = ref("gemini");
 const selectedKeyIndex = ref(1);
-const questionCount = ref(5);
+const questionCount = ref(10);
 const isAutoKey = ref(true);
-const isAutoModel = ref(true);
 const generationMode = ref("hard");
 
 const providers = {
     gemini: {
-        name: "Gemini 2.5",
+        name: "Gemini 2.5 Flash",
         icon: Sparkles,
-        desc: "Multimodal (Vision)",
+        tagline: "Vision Master",
+        desc: "Jago baca gambar & grafik.",
         maxKeys: 10,
+        modelId: "gemini-2.5-flash",
     },
     groq: {
         name: "Groq Llama 3",
         icon: Zap,
-        desc: "Ultra Fast Inference",
+        tagline: "Speed Demon",
+        desc: "Super ngebut, cocok buat teks panjang.",
         maxKeys: 5,
     },
     aiml: {
         name: "AIML (GPT-4o)",
         icon: Cloud,
-        desc: "Premium Model",
+        tagline: "Premium Brain",
+        desc: "High quality reasoning.",
         maxKeys: 5,
     },
 };
 
 // --- LOAD API KEYS ---
 const apiKeys = { gemini: {}, groq: {}, aiml: {} };
-for (let i = 1; i <= 10; i++)
-    apiKeys.gemini[i] =
-        import.meta.env[`VITE_GEMINI_API_KEY_${i}`] ||
-        import.meta.env[`VITE_GEMINI_API_KEY`] ||
-        "";
-for (let i = 1; i <= 5; i++)
-    apiKeys.groq[i] =
-        import.meta.env[`VITE_GROQ_API_KEY_${i}`] ||
-        import.meta.env[`VITE_GROQ_API_KEY`] ||
-        "";
-for (let i = 1; i <= 5; i++)
-    apiKeys.aiml[i] = import.meta.env[`VITE_AIML_API_KEY_${i}`] || "";
+const loadKeys = (prefix, target, max) => {
+    for (let i = 1; i <= max; i++) {
+        target[i] =
+            import.meta.env[`VITE_${prefix}_API_KEY_${i}`] ||
+            import.meta.env[`VITE_${prefix}_API_KEY`] ||
+            "";
+    }
+};
+loadKeys("GEMINI", apiKeys.gemini, 10);
+loadKeys("GROQ", apiKeys.groq, 5);
+loadKeys("AIML", apiKeys.aiml, 5);
 
 const subjectTitle = ref("");
 const rawMaterial = ref("");
 const generatedQuestions = ref([]);
 
 // --- AUTO-SAVE & RESTORE ---
-onMounted(() => {
+onMounted(async () => {
     const savedDraft = localStorage.getItem(DRAFT_KEY);
     if (savedDraft) {
         try {
@@ -131,21 +151,20 @@ onMounted(() => {
                 subjectTitle.value = parsed.title || "";
                 rawMaterial.value = parsed.material || "";
                 generatedQuestions.value = parsed.questions || [];
-
                 if (generatedQuestions.value.length > 0) {
-                    addToast("Draft Restored! 📂", "info");
-                    nextTick(() => {
-                        if (previewSection.value)
-                            previewSection.value.scrollIntoView({
-                                behavior: "smooth",
-                            });
-                    });
+                    addToast("Draft recovered! Let's continue.", "info");
+                    nextTick(() =>
+                        previewSection.value?.scrollIntoView({
+                            behavior: "smooth",
+                        }),
+                    );
                 }
             }
         } catch (e) {
             localStorage.removeItem(DRAFT_KEY);
         }
     }
+    await refreshLibrary();
 });
 
 watch(
@@ -157,24 +176,30 @@ watch(
             generatedQuestions.value.length === 0
         )
             return;
-        const draftData = {
-            title: subjectTitle.value,
-            material: rawMaterial.value,
-            questions: generatedQuestions.value,
-        };
-        localStorage.setItem(DRAFT_KEY, JSON.stringify(draftData));
+        localStorage.setItem(
+            DRAFT_KEY,
+            JSON.stringify({
+                title: subjectTitle.value,
+                material: rawMaterial.value,
+                questions: generatedQuestions.value,
+            }),
+        );
     },
     { deep: true },
 );
 
-const clearDraft = () => {
-    localStorage.removeItem(DRAFT_KEY);
+const clearDraft = () => localStorage.removeItem(DRAFT_KEY);
+
+// --- HELPER: FILE SYSTEM ---
+const formatFileSize = (bytes) => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024,
+        sizes = ["Bytes", "KB", "MB", "GB"],
+        i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 };
 
-// --- HELPER: FILE ---
-const handleFileUpload = (event) => {
-    processFile(event.target.files[0]);
-};
+const handleFileUpload = (event) => processFile(event.target.files[0]);
 const onDragOver = (e) => {
     e.preventDefault();
     isDragging.value = true;
@@ -189,35 +214,95 @@ const onDrop = (e) => {
     processFile(e.dataTransfer.files[0]);
 };
 
-const processFile = (file) => {
-    if (file) {
-        if (file.type !== "application/pdf") {
-            addToast("PDF Only!", "error");
-            return;
-        }
-        pdfFile.value = file;
-        pdfFileName.value = file.name;
-        if (!subjectTitle.value) {
-            subjectTitle.value = file.name
-                .replace(/\.pdf$/i, "")
-                .replace(/[-_]/g, " ");
-        }
-        addToast("PDF Ready!", "success");
-    }
+const processFile = async (file) => {
+    if (!file) return;
+    if (file.type !== "application/pdf")
+        return addToast("Only PDF allowed bro!", "error");
+    if (file.size > 200 * 1024 * 1024)
+        return addToast("File kegedean (Max 200MB)", "error");
+
+    isUploadingPdf.value = true;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    pdfFile.value = file;
+    pdfFileName.value = file.name;
+    pdfFileSize.value = formatFileSize(file.size);
+
+    if (!subjectTitle.value)
+        subjectTitle.value = file.name
+            .replace(/\.pdf$/i, "")
+            .replace(/[-_]/g, " ");
+
+    isUploadingPdf.value = false;
+    addToast("PDF Ready! Let's cook.", "success");
 };
 
-const fileToGenerativePart = async (file) => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const base64String = reader.result.split(",")[1];
-            resolve({
-                inlineData: { data: base64String, mimeType: file.type },
-            });
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+const removeFile = () => {
+    pdfFile.value = null;
+    pdfFileName.value = "";
+    pdfFileSize.value = "";
+    const fileInput = document.getElementById("pdf-upload");
+    if (fileInput) fileInput.value = "";
+};
+
+// --- LOGIC 1: UPLOAD FILE KE GEMINI (<10MB) ---
+const uploadFileToGemini = async (file, apiKey) => {
+    const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
+    const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+            "X-Goog-Upload-Protocol": "raw",
+            "X-Goog-Upload-File-Name": file.name,
+            "Content-Type": file.type,
+        },
+        body: file,
     });
+
+    if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error?.message || "Upload Failed");
+    }
+
+    const data = await response.json();
+    const fileUri = data.file.uri;
+    const fileName = data.file.name;
+
+    // Polling
+    let state = data.file.state;
+    let attempts = 0;
+    while (state === "PROCESSING") {
+        attempts++;
+        if (attempts > 60) throw new Error("Timeout: Kelamaan processingnya.");
+        processingStage.value = `AI is reading your file (${attempts}s)...`;
+        await new Promise((r) => setTimeout(r, 1500));
+
+        const pollRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${apiKey}`,
+        );
+        const pollData = await pollRes.json();
+        state = pollData.state;
+        if (state === "FAILED") throw new Error("Google gagal baca PDF.");
+    }
+    return fileUri;
+};
+
+// --- LOGIC 2: EXTRACT TEXT (>10MB) ---
+const extractTextFromPdf = async (file) => {
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+    const pdf = await loadingTask.promise;
+
+    let fullText = "";
+    const totalPages = pdf.numPages;
+
+    for (let i = 1; i <= totalPages; i++) {
+        processingStage.value = `Extracting Text Page ${i}/${totalPages}...`;
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item) => item.str).join(" ");
+        fullText += `\n--- Page ${i} ---\n${pageText}`;
+    }
+    return fullText;
 };
 
 // --- HELPER: API CALLER ---
@@ -225,26 +310,47 @@ const callProviderApi = async (
     providerName,
     apiKey,
     prompt,
-    filePart = null,
+    filePayload = null,
 ) => {
+    // GEMINI HANDLER
     if (providerName === "gemini") {
-        const parts = [{ text: prompt }];
-        if (filePart) parts.push(filePart);
+        const contents = { parts: [{ text: prompt }] };
+        const generationConfig = { responseMimeType: "application/json" };
+
+        if (filePayload && filePayload.fileUri) {
+            contents.parts.push({
+                fileData: {
+                    mimeType: "application/pdf",
+                    fileUri: filePayload.fileUri,
+                },
+            });
+        }
+
         const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${providers.gemini.modelId}:generateContent?key=${apiKey}`,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ contents: [{ parts: parts }] }),
+                body: JSON.stringify({
+                    contents: [contents],
+                    generationConfig,
+                }),
             },
         );
+
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || "Gemini Error");
-        return data.candidates?.[0]?.content?.parts?.[0]?.text;
-    } else if (providerName === "groq") {
-        if (filePart) throw new Error("Groq doesn't support PDF.");
+
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error("AI Empty Response.");
+        return text;
+
+        // GROQ & AIML HANDLER
+    } else {
         const res = await fetch(
-            "https://api.groq.com/openai/v1/chat/completions",
+            providerName === "groq"
+                ? "https://api.groq.com/openai/v1/chat/completions"
+                : "https://api.aimlapi.com/v1/chat/completions",
             {
                 method: "POST",
                 headers: {
@@ -252,30 +358,17 @@ const callProviderApi = async (
                     Authorization: `Bearer ${apiKey}`,
                 },
                 body: JSON.stringify({
-                    model: "llama-3.3-70b-versatile",
+                    model:
+                        providerName === "groq"
+                            ? "llama-3.3-70b-versatile"
+                            : "gpt-4o",
                     messages: [{ role: "user", content: prompt }],
+                    max_tokens: 4000,
                 }),
             },
         );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Groq Error");
-        return data.choices?.[0]?.message?.content;
-    } else if (providerName === "aiml") {
-        if (filePart) throw new Error("AIML doesn't support PDF.");
-        const res = await fetch("https://api.aimlapi.com/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-                model: "gpt-4o",
-                messages: [{ role: "user", content: prompt }],
-                max_tokens: 2000,
-            }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "AIML Error");
+        if (!res.ok) throw new Error(data.error?.message || "Provider Error");
         return data.choices?.[0]?.message?.content;
     }
 };
@@ -283,7 +376,7 @@ const callProviderApi = async (
 const tryProviderWithRotation = async (
     providerName,
     prompt,
-    filePart = null,
+    filePayload = null,
 ) => {
     let keysToTry = [];
     const max = providers[providerName].maxKeys;
@@ -299,149 +392,138 @@ const tryProviderWithRotation = async (
                 if (apiKeys[providerName][i])
                     keysToTry.push(apiKeys[providerName][i]);
     }
+
     if (keysToTry.length === 0)
-        throw new Error(`No API Keys for ${providerName}`);
+        throw new Error(`No API Key for ${providerName}`);
+
     for (const apiKey of keysToTry) {
         try {
+            let finalPayload = filePayload;
+            if (
+                providerName === "gemini" &&
+                filePayload &&
+                filePayload instanceof File
+            ) {
+                processingStage.value = "Uploading to AI Brain (<10MB)...";
+                const uri = await uploadFileToGemini(filePayload, apiKey);
+                finalPayload = { fileUri: uri };
+            }
             const result = await callProviderApi(
                 providerName,
                 apiKey,
                 prompt,
-                filePart,
+                finalPayload,
             );
             if (result) return result;
         } catch (err) {
-            console.warn(`[${providerName}] Key failed, rotating...`);
+            console.warn(`[${providerName}] Retry... Error: ${err.message}`);
         }
     }
-    throw new Error(`All keys exhausted for ${providerName}.`);
+    throw new Error(`All keys exhausted. Please check your API quota.`);
 };
 
-// --- CORE LOGIC ---
+// --- CORE LOGIC (HYBRID) ---
 const generateQuestions = async () => {
-    if (!subjectTitle.value || (!rawMaterial.value && !pdfFile.value))
-        return addToast("Input Data Missing!", "error");
+    const titleToUse =
+        saveMode.value === "new"
+            ? subjectTitle.value
+            : existingCourses.value.find((c) => c.id === selectedCourseId.value)
+                  ?.title || "Course Material";
+
+    if (!titleToUse || (!rawMaterial.value && !pdfFile.value))
+        return addToast("Judul & Materi wajib diisi bos!", "error");
+
     isLoading.value = true;
     generatedQuestions.value = [];
 
     try {
         let extractedText = rawMaterial.value;
-        let filePart = null;
+        let filePayload = null;
 
-        // 1. SCAN PDF (Jika ada)
         if (pdfFile.value) {
-            processingStage.value = "Gemini Vision: Analyzing PDF...";
-            try {
-                filePart = await fileToGenerativePart(pdfFile.value);
+            const fileSizeMB = pdfFile.value.size / (1024 * 1024);
+
+            // HYBRID SWITCHER
+            if (fileSizeMB > 10) {
+                processingStage.value = "Big File Detected: Extracting Text...";
+                addToast(
+                    "File > 10MB. Menggunakan mode Text Extraction (Hemat Resource).",
+                    "info",
+                );
+                const pdfText = await extractTextFromPdf(pdfFile.value);
+                extractedText =
+                    (extractedText ? extractedText + "\n\n" : "") + pdfText;
+                filePayload = null;
+            } else {
+                processingStage.value = "Smart Vision Mode Activated...";
+                filePayload = pdfFile.value;
                 if (currentProvider.value !== "gemini") {
-                    // Jika pakai Groq, estafet dulu ke Gemini buat baca teksnya
-                    const extractionPrompt = `TUGAS: Ekstrak seluruh teks materi kuliah dari PDF ini. OUTPUT: Hanya teks mentah.`;
-                    extractedText = await tryProviderWithRotation(
-                        "gemini",
-                        extractionPrompt,
-                        filePart,
-                    );
-                    addToast(
-                        "PDF Extracted! Handing over to " +
-                            providers[currentProvider.value].name,
-                        "success",
-                    );
-                    filePart = null;
+                    processingStage.value = "Extracting Text for Non-Gemini...";
+                    const pdfText = await extractTextFromPdf(pdfFile.value);
+                    extractedText =
+                        (extractedText ? extractedText + "\n\n" : "") + pdfText;
+                    filePayload = null;
                 }
-            } catch (e) {
-                throw new Error("PDF Read Failed: " + e.message);
             }
         }
 
-        // 2. GENERATE SOAL (PROMPT BAHASA INDONESIA)
-        processingStage.value = `${providers[currentProvider.value].name}: Thinking Process...`;
+        // PROMPT
+        processingStage.value = `AI is crafting ${questionCount.value} questions...`;
 
-        // LOGIC MODE: Strict (Fokus) vs Smart (Kreatif)
-        let constraint = "";
-        if (generationMode.value === "hard") {
-            constraint = `
-            ATURAN MODE FOKUS (STRICT):
-            - Pertanyaan dan Jawaban WAJIB 100% berdasarkan materi sumber yang diberikan.
-            - JANGAN menambah fakta dari luar materi.
-            - Pada field "source", sebutkan spesifik bagian mana di materi (contoh: "Slide Halaman 2", "Paragraf 1").
-            `;
-        } else {
-            constraint = `
-            ATURAN MODE KREATIF (SMART):
-            - Gunakan materi sumber sebagai pondasi utama.
-            - Anda DIHARUSKAN menggunakan pengetahuan umum Anda untuk menjelaskan konsep yang sulit agar lebih mudah dimengerti (seperti dosen menjelaskan ke mahasiswa).
-            - Berikan contoh nyata atau analogi jika perlu.
-            - Pada field "source", tulis "Penjelasan Tambahan AI" atau "Konteks Materi".
-            `;
-        }
+        const constraint =
+            generationMode.value === "hard"
+                ? `STRICT MODE: Jawaban WAJIB 100% dari source material. Dilarang berhalusinasi atau menambah info luar.`
+                : `SMART MODE: Gunakan materi sebagai dasar, tapi boleh tambahkan pengetahuan umum agar lebih mudah dimengerti.`;
 
-        // PROMPT UTAMA (STRICT INDONESIA, UI PROMPT ENGLISH)
         const finalPrompt = `
-            BERPERANLAH SEBAGAI: Dosen Pembimbing Akademik yang Cerdas & Peduli.
-            TOPIK: "${subjectTitle.value}"
+            ROLE: Super Teacher & Academic Expert.
+            TOPIC: "${titleToUse}"
+            TASK: Create ${questionCount.value} high-quality Flashcards (Q&A).
+            LANGUAGE: Indonesian (Casual but educative).
+            MODE: ${constraint}
 
-            INSTRUKSI UTAMA:
-            Semua Output (Pertanyaan, Jawaban, Tag) WAJIB dalam BAHASA INDONESIA yang natural, akademis namun mudah dipahami mahasiswa.
+            JSON STRUCTURE (Return ONLY this JSON array, no other text):
+            [{"id": 1, "tag": "Sub-Bab", "icon": "Brain", "q": "Pertanyaan?", "a": "Jawaban lengkap & jelas.", "source": "Halaman/Konteks"}]
 
-            TUGAS 1 (SMART TAGGING):
-            Analisis TOPIK. Buat "tag" yang SANGAT RINGKAS & CATCHY (Maks 3 kata).
-            Contoh: "Psikologi Anak", "Sejarah RI".
-
-            TUGAS 2 (KONTEN FLASHCARD):
-            Pelajari materi yang diberikan dengan teliti.
-            Buatlah ${questionCount.value} Soal Flashcard (Tanya Jawab).
-
-            ${constraint}
-
-            FORMAT OUTPUT (Wajib JSON Array Murni):
-            [
-              {
-                "id": 1,
-                "tag": "...",
-                "icon": "Brain",
-                "q": "Pertanyaan (Bahasa Indonesia)?",
-                "a": "Jawaban penjelasan lengkap (Bahasa Indonesia).",
-                "source": "Sumber info"
-              }
-            ]
-
-            Pilihan Icon: Brain, MessageCircle, Dna, Lightbulb, Heart, Star, Zap.
-
-            ${filePart ? "SUMBER: DOKUMEN PDF TERLAMPIR" : `SUMBER TEKS:\n"${extractedText}"`}
+            ${filePayload ? "SOURCE: PDF ATTACHED (Analyze images & text)." : `SOURCE TEXT:\n"${extractedText.substring(0, 900000)}"`}
         `;
 
         let result = await tryProviderWithRotation(
             currentProvider.value,
             finalPrompt,
-            filePart,
+            filePayload,
         );
 
-        // Cleaning Response
-        result = result.replace(/```json|```/g, "").trim();
+        // --- FIX: GROQ/AI JSON CLEANER ---
+        // Mencari [ pertama dan ] terakhir untuk mengambil JSON murni
+        // Ini mengatasi error "AI Output Malformed" jika AI bawel
         const firstBracket = result.indexOf("[");
         const lastBracket = result.lastIndexOf("]");
 
         if (firstBracket !== -1 && lastBracket !== -1) {
-            const cleanJson = result.substring(firstBracket, lastBracket + 1);
-            const parsed = JSON.parse(cleanJson);
+            result = result.substring(firstBracket, lastBracket + 1);
+        } else {
+            throw new Error("AI tidak memberikan JSON Array yang valid.");
+        }
+
+        try {
+            const parsed = JSON.parse(result);
             generatedQuestions.value = parsed.map((item, index) => ({
                 ...item,
                 id: Date.now() + index,
-                tag: item.tag || subjectTitle.value,
+                tag: item.tag || titleToUse,
+                icon: item.icon || "Brain",
             }));
             addToast(
-                `Generated ${generatedQuestions.value.length} Smart Cards!`,
+                `Boom! ${generatedQuestions.value.length} Cards Generated.`,
                 "success",
             );
-
-            await nextTick();
-            if (previewSection.value)
-                previewSection.value.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                });
-        } else {
-            throw new Error("Invalid JSON Format.");
+            nextTick(() =>
+                previewSection.value?.scrollIntoView({ behavior: "smooth" }),
+            );
+        } catch (jsonErr) {
+            console.error("Failed JSON:", result);
+            throw new Error("AI Output Malformed (JSON Error).");
         }
     } catch (error) {
         console.error(error);
@@ -452,7 +534,7 @@ const generateQuestions = async () => {
     }
 };
 
-// --- ACTIONS ---
+// --- ACTIONS & CRUD ---
 const startEdit = (i) => {
     editingIndex.value = i;
     tempEditData.value = JSON.parse(
@@ -462,22 +544,21 @@ const startEdit = (i) => {
 const saveEdit = (i) => {
     generatedQuestions.value[i] = { ...tempEditData.value };
     editingIndex.value = null;
-    addToast("Changes Saved!", "success");
+    addToast("Saved!", "success");
 };
 const cancelEdit = () => {
     editingIndex.value = null;
     tempEditData.value = {};
 };
+const removeDraft = (i) => generatedQuestions.value.splice(i, 1);
 
-// Generate Summary Material (Textarea Only)
 const generateMaterialFromTitle = async () => {
-    if (!subjectTitle.value) return addToast("Title Required!", "error");
+    if (!subjectTitle.value) return addToast("Isi judul dulu bos!", "error");
     isGeneratingMaterial.value = true;
-    const prompt = `Bertindaklah sebagai Dosen. Buatkan rangkuman kuliah padat, jelas, dan terstruktur tentang "${subjectTitle.value}". Gunakan Bahasa Indonesia.`;
     try {
         const result = await tryProviderWithRotation(
             currentProvider.value,
-            prompt,
+            `Buatkan rangkuman kuliah padat tentang "${subjectTitle.value}". Bahasa Indonesia.`,
         );
         rawMaterial.value = result;
         addToast("Material Generated!", "success");
@@ -492,33 +573,58 @@ const saveToDatabase = async () => {
     if (generatedQuestions.value.length === 0) return;
     isSaving.value = true;
     try {
-        await addDoc(collection(db, "courses"), {
-            title: subjectTitle.value,
-            createdAt: new Date(),
-            questionsList: generatedQuestions.value,
-        });
-        addToast("Saved to DB! 🎉", "success");
-        subjectTitle.value = "";
-        rawMaterial.value = "";
-        generatedQuestions.value = [];
-        pdfFile.value = null;
-        pdfFileName.value = "";
-        const fileInput = document.getElementById("pdf-upload");
-        if (fileInput) fileInput.value = "";
-        clearDraft();
+        if (saveMode.value === "new") {
+            if (!subjectTitle.value)
+                throw new Error("Judul folder wajib diisi!");
+            await addDoc(collection(db, "courses"), {
+                title: subjectTitle.value,
+                createdAt: new Date(),
+                questionsList: generatedQuestions.value,
+            });
+            addToast("New Folder Created!", "success");
+        } else {
+            if (!selectedCourseId.value)
+                throw new Error("Pilih folder tujuan!");
+            await updateDoc(doc(db, "courses", selectedCourseId.value), {
+                questionsList: arrayUnion(...generatedQuestions.value),
+            });
+            addToast("Content Added to Folder!", "success");
+        }
+        resetForm();
     } catch (error) {
-        addToast("Save Failed: " + error.message, "error");
+        addToast("Failed: " + error.message, "error");
     } finally {
         isSaving.value = false;
     }
 };
-const removeDraft = (i) => {
-    generatedQuestions.value.splice(i, 1);
+
+const resetForm = async () => {
+    subjectTitle.value = "";
+    rawMaterial.value = "";
+    generatedQuestions.value = [];
+    removeFile();
+    selectedCourseId.value = "";
+    clearDraft();
+    await refreshLibrary();
 };
+
+const refreshLibrary = async () => {
+    try {
+        const q = query(
+            collection(db, "courses"),
+            orderBy("createdAt", "desc"),
+        );
+        const s = await getDocs(q);
+        existingCourses.value = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (e) {}
+};
+
 const handleLogout = async () => {
     await signOut(auth);
     router.push("/login");
 };
+
+// --- MODAL CONTROLLERS ---
 const openResetModal = () => (showResetModal.value = true);
 const confirmResetAction = async () => {
     showResetModal.value = false;
@@ -529,65 +635,73 @@ const confirmResetAction = async () => {
             q.docs.map((d) => deleteDoc(doc(db, "courses", d.id))),
         );
         clearDraft();
-        addToast("Database Cleaned.", "success");
+        addToast("Database Wiped Clean.", "success");
     } catch (e) {
         addToast("Reset Failed.", "error");
     } finally {
         isResetting.value = false;
     }
 };
+
+// Modal Library
 const openMaterialsModal = async () => {
     showMaterialsModal.value = true;
     isLoadingMaterials.value = true;
-    existingCourses.value = [];
-    try {
-        const q = query(
-            collection(db, "courses"),
-            orderBy("createdAt", "desc"),
-        );
-        const querySnapshot = await getDocs(q);
-        existingCourses.value = querySnapshot.docs.map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-        }));
-    } catch (e) {
-        addToast("Fetch Error: " + e.message, "error");
-    } finally {
-        isLoadingMaterials.value = false;
-    }
+    await refreshLibrary();
+    isLoadingMaterials.value = false;
 };
-const deleteCourse = async (id, title) => {
-    if (!confirm(`Delete "${title}"?`)) return;
+
+// NEW: Delete Course Flow
+const confirmDeleteCourse = (id, title) => {
+    courseToDelete.value = { id, title };
+    showDeleteCourseModal.value = true;
+};
+
+const executeDeleteCourse = async () => {
+    if (!courseToDelete.value) return;
+    showDeleteCourseModal.value = false;
     try {
-        await deleteDoc(doc(db, "courses", id));
+        await deleteDoc(doc(db, "courses", courseToDelete.value.id));
         existingCourses.value = existingCourses.value.filter(
-            (c) => c.id !== id,
+            (c) => c.id !== courseToDelete.value.id,
         );
-        addToast(`Deleted.`, "success");
+        addToast(`Folder "${courseToDelete.value.title}" deleted.`, "success");
     } catch (e) {
-        addToast("Failed.", "error");
+        addToast("Delete Failed.", "error");
     }
 };
-const formatDate = (timestamp) => {
-    if (!timestamp) return "-";
-    return new Date(timestamp.seconds * 1000).toLocaleDateString("id-ID", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-    });
-};
+
+const formatDate = (ts) =>
+    !ts
+        ? "-"
+        : new Date(ts.seconds * 1000).toLocaleDateString("id-ID", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+          });
 </script>
 
 <template>
     <div
-        class="min-h-screen bg-cozy-bg text-cozy-text font-sans pb-24 transition-colors duration-300"
+        class="min-h-screen bg-cozy-bg text-cozy-text font-sans pb-32 transition-colors duration-300"
     >
         <ConfirmModal
             :isOpen="showResetModal"
-            title="Wipe All Data?"
-            message="This action is permanent."
+            title="Wipe Everything?"
+            message="Ini bakal hapus SEMUA data permanen. Yakin bos?"
+            confirmText="Ya, Hapus Semua"
             @close="showResetModal = false"
             @confirm="confirmResetAction"
+            :isDanger="true"
+        />
+
+        <ConfirmModal
+            :isOpen="showDeleteCourseModal"
+            title="Hapus Folder?"
+            :message="`Yakin mau hapus folder '${courseToDelete?.title}'?`"
+            confirmText="Hapus Folder"
+            @close="showDeleteCourseModal = false"
+            @confirm="executeDeleteCourse"
             :isDanger="true"
         />
 
@@ -608,16 +722,16 @@ const formatDate = (timestamp) => {
                     >
                         <div class="flex items-center gap-3">
                             <div
-                                class="p-2 bg-cozy-primary/10 rounded-xl text-cozy-primary"
+                                class="p-3 bg-cozy-primary/10 rounded-2xl text-cozy-primary"
                             >
-                                <Library class="w-5 h-5" />
+                                <Library class="w-6 h-6" />
                             </div>
                             <div>
-                                <h3 class="font-bold text-lg text-cozy-text">
-                                    Library
+                                <h3 class="font-bold text-xl text-cozy-text">
+                                    Library Collection
                                 </h3>
                                 <p class="text-xs text-cozy-muted">
-                                    Manage existing content.
+                                    Manage all your courses here.
                                 </p>
                             </div>
                         </div>
@@ -625,7 +739,7 @@ const formatDate = (timestamp) => {
                             @click="showMaterialsModal = false"
                             class="p-2 rounded-full text-cozy-muted hover:bg-red-50 hover:text-red-500 transition-all"
                         >
-                            <X class="w-5 h-5" />
+                            <X class="w-6 h-6" />
                         </button>
                     </div>
                     <div
@@ -633,36 +747,33 @@ const formatDate = (timestamp) => {
                     >
                         <div
                             v-if="isLoadingMaterials"
-                            class="flex flex-col items-center justify-center py-12"
+                            class="flex justify-center py-12"
                         >
                             <Loader2
-                                class="w-8 h-8 text-cozy-primary animate-spin mb-2"
+                                class="w-8 h-8 text-cozy-primary animate-spin"
                             />
-                            <p class="text-xs text-cozy-muted">
-                                Fetching data...
-                            </p>
                         </div>
                         <div
                             v-else-if="existingCourses.length > 0"
                             v-for="course in existingCourses"
                             :key="course.id"
-                            class="flex items-center justify-between p-4 bg-cozy-card border border-cozy-border rounded-2xl shadow-sm hover:shadow-md transition-all group"
+                            class="flex items-center justify-between p-5 bg-cozy-card border border-cozy-border rounded-2xl shadow-sm hover:shadow-md transition-all"
                         >
                             <div class="flex items-center gap-4">
                                 <div
-                                    class="w-10 h-10 rounded-full bg-cozy-primary/10 flex items-center justify-center text-cozy-primary font-bold text-lg uppercase"
+                                    class="w-12 h-12 rounded-full bg-cozy-primary/10 flex items-center justify-center text-cozy-primary font-bold text-lg uppercase"
                                 >
                                     {{ course.title.charAt(0) }}
                                 </div>
                                 <div>
                                     <h4
-                                        class="font-bold text-cozy-text text-sm"
+                                        class="font-bold text-cozy-text text-base"
                                     >
                                         {{ course.title }}
                                     </h4>
                                     <div class="flex items-center gap-3 mt-1">
                                         <span
-                                            class="text-[10px] text-cozy-muted flex items-center gap-1"
+                                            class="text-xs text-cozy-muted flex items-center gap-1"
                                             ><FileQuestion class="w-3 h-3" />
                                             {{
                                                 course.questionsList?.length ||
@@ -670,30 +781,25 @@ const formatDate = (timestamp) => {
                                             }}
                                             Items</span
                                         >
-                                        <span
-                                            class="text-[10px] text-cozy-muted flex items-center gap-1"
-                                            ><Calendar class="w-3 h-3" />
-                                            {{
-                                                formatDate(course.createdAt)
-                                            }}</span
-                                        >
                                     </div>
                                 </div>
                             </div>
                             <button
-                                @click="deleteCourse(course.id, course.title)"
-                                class="p-2 text-cozy-muted hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                                title="Hapus"
+                                @click="
+                                    confirmDeleteCourse(course.id, course.title)
+                                "
+                                class="p-3 text-cozy-muted hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
                             >
-                                <Trash2 class="w-4 h-4" />
+                                <Trash2 class="w-5 h-5" />
                             </button>
                         </div>
-                        <div
-                            v-else
-                            class="text-center py-12 opacity-50 text-cozy-muted"
-                        >
-                            <Library class="w-12 h-12 mx-auto mb-2" />
-                            <p class="text-sm font-bold">Database Empty</p>
+                        <div v-else class="text-center py-16 opacity-50">
+                            <Library
+                                class="w-16 h-16 mx-auto mb-4 text-cozy-muted"
+                            />
+                            <p class="text-base font-bold text-cozy-muted">
+                                Belum ada materi, bikin dulu gih!
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -704,203 +810,183 @@ const formatDate = (timestamp) => {
             class="bg-cozy-card border-b border-cozy-border sticky top-0 z-30 shadow-sm backdrop-blur-xl bg-opacity-95"
         >
             <div
-                class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4"
+                class="max-w-7xl mx-auto px-6 md:px-8 py-5 flex items-center justify-between gap-6"
             >
-                <div class="flex items-center gap-3 flex-1 min-w-0">
+                <div class="flex items-center gap-4 flex-1 min-w-0">
                     <div
-                        class="w-10 h-10 bg-cozy-primary text-white rounded-xl flex items-center justify-center shadow-lg shadow-cozy-primary/30 shrink-0"
+                        class="w-12 h-12 bg-cozy-primary text-white rounded-2xl flex items-center justify-center shadow-lg shadow-cozy-primary/30 shrink-0"
                     >
-                        <Settings2 class="w-6 h-6 animate-spin-slow" />
+                        <Settings2 class="w-7 h-7 animate-spin-slow" />
                     </div>
                     <div class="truncate">
                         <h1
-                            class="font-display text-lg font-bold text-cozy-text leading-tight"
+                            class="font-display text-xl md:text-2xl font-bold text-cozy-text leading-tight"
                         >
-                            Admin
+                            Admin Command Center
                         </h1>
                         <p
-                            class="text-xs text-cozy-muted font-medium hidden md:block"
+                            class="text-sm text-cozy-muted font-medium hidden md:block"
                         >
-                            System Operational
+                            Manage your AI Learning content.
                         </p>
                     </div>
                 </div>
-                <div class="flex gap-2 shrink-0">
-                    <button
-                        @click="openMaterialsModal"
-                        class="flex items-center gap-2 px-3 py-2 md:px-4 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-primary hover:text-white hover:border-cozy-primary transition-all"
-                        title="Perpustakaan"
-                    >
-                        <Library class="w-4 h-4" />
-                        <span class="hidden md:inline">Library</span>
+                <div class="flex gap-3 shrink-0">
+                    <button @click="openMaterialsModal" class="btn-header">
+                        <Library class="w-5 h-5" /><span
+                            class="hidden md:inline"
+                            >Library</span
+                        >
                     </button>
-                    <button
-                        @click="router.push('/')"
-                        class="flex items-center gap-2 px-3 py-2 md:px-4 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-white transition-all"
-                        title="Ke Beranda"
-                    >
-                        <Home class="w-4 h-4" />
-                        <span class="hidden md:inline">Home</span>
+                    <button @click="router.push('/')" class="btn-header">
+                        <Home class="w-5 h-5" /><span class="hidden md:inline"
+                            >Home</span
+                        >
                     </button>
                     <button
                         @click="handleLogout"
-                        class="flex items-center gap-2 px-3 py-2 md:px-4 bg-cozy-bg border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-cozy-bg transition-all"
-                        title="Keluar"
+                        class="btn-header text-red-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
                     >
-                        <LogOut class="w-4 h-4" />
-                        <span class="hidden md:inline">Exit</span>
+                        <LogOut class="w-5 h-5" /><span class="hidden md:inline"
+                            >Exit</span
+                        >
                     </button>
                 </div>
             </div>
         </header>
 
         <main
-            class="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8"
+            class="max-w-7xl mx-auto px-6 md:px-8 py-10 grid grid-cols-1 lg:grid-cols-12 gap-10"
         >
-            <div class="lg:col-span-4 space-y-6">
+            <div class="lg:col-span-4 space-y-8">
                 <div
-                    class="bg-cozy-card border border-cozy-border rounded-[24px] p-6 shadow-sm overflow-hidden relative"
+                    class="bg-cozy-card border border-cozy-border rounded-[32px] p-8 shadow-sm relative overflow-hidden"
                 >
                     <div
-                        class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cozy-primary to-cozy-accent"
+                        class="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-cozy-primary to-cozy-accent"
                     ></div>
-                    <div class="flex justify-between items-center mb-6">
-                        <h3
-                            class="text-sm font-bold text-cozy-text flex items-center gap-2"
-                        >
-                            <BrainCircuit class="w-4 h-4 text-cozy-primary" />
-                            AI Core
-                        </h3>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2 mb-6">
+                    <h3
+                        class="text-base font-bold text-cozy-text flex items-center gap-2.5 mb-6"
+                    >
+                        <BrainCircuit class="w-5 h-5 text-cozy-primary" /> AI
+                        Engine Status
+                    </h3>
+
+                    <div class="grid grid-cols-1 gap-3 mb-6">
                         <button
                             v-for="(prov, key) in providers"
                             :key="key"
                             @click="currentProvider = key"
-                            class="flex flex-col items-center justify-center p-3 rounded-2xl border transition-all active:scale-95 relative"
+                            class="flex items-center gap-4 p-4 rounded-2xl border transition-all active:scale-95 relative text-left group"
                             :class="
                                 currentProvider === key
-                                    ? 'bg-cozy-primary/10 border-cozy-primary text-cozy-primary ring-1 ring-cozy-primary'
-                                    : 'bg-cozy-bg border-cozy-border text-cozy-muted hover:border-cozy-primary/50'
+                                    ? 'bg-cozy-primary/5 border-cozy-primary ring-1 ring-cozy-primary'
+                                    : 'bg-cozy-bg border-cozy-border hover:border-cozy-primary/50'
                             "
                         >
-                            <component
-                                :is="prov.icon"
-                                class="w-5 h-5 mb-1"
-                            /><span class="text-[9px] font-bold">{{
-                                prov.name
-                            }}</span>
                             <div
-                                v-if="currentProvider === key"
-                                class="absolute -top-1 -right-1 w-4 h-4 bg-cozy-primary rounded-full flex items-center justify-center border-2 border-white"
+                                class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors"
+                                :class="
+                                    currentProvider === key
+                                        ? 'bg-cozy-primary text-white'
+                                        : 'bg-white text-cozy-muted group-hover:text-cozy-primary'
+                                "
                             >
-                                <Check class="w-2 h-2 text-white" />
+                                <component :is="prov.icon" class="w-5 h-5" />
+                            </div>
+                            <div class="flex-1">
+                                <div class="flex justify-between items-center">
+                                    <span
+                                        class="font-bold text-sm text-cozy-text"
+                                        >{{ prov.name }}</span
+                                    >
+                                    <span
+                                        class="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                                        :class="
+                                            currentProvider === key
+                                                ? 'bg-cozy-primary text-white'
+                                                : 'bg-gray-100 text-gray-500'
+                                        "
+                                        >{{ prov.tagline }}</span
+                                    >
+                                </div>
+                                <p class="text-xs text-cozy-muted mt-0.5">
+                                    {{ prov.desc }}
+                                </p>
                             </div>
                         </button>
                     </div>
-                    <div
-                        class="bg-cozy-bg/50 rounded-2xl p-4 border border-cozy-border"
-                    >
-                        <div class="flex justify-between items-center mb-3">
-                            <span
-                                class="text-[10px] font-bold text-cozy-muted uppercase flex items-center gap-1"
-                                ><Zap class="w-3 h-3" /> AI Power</span
-                            ><button
-                                @click="isAutoKey = !isAutoKey"
-                                class="text-[10px] font-bold px-2 py-1 rounded-lg border transition-all"
-                                :class="
-                                    isAutoKey
-                                        ? 'bg-cozy-accent/10 text-cozy-accent border-cozy-accent/30'
-                                        : 'bg-white text-gray-400 border-gray-200'
-                                "
-                            >
-                                {{ isAutoKey ? "Auto" : "Manual" }}
-                            </button>
-                        </div>
-                        <div
-                            class="grid grid-cols-5 gap-2"
-                            :class="{
-                                'opacity-50 pointer-events-none': isAutoKey,
-                            }"
-                        >
-                            <button
-                                v-for="i in providers[currentProvider].maxKeys"
-                                :key="i"
-                                @click="selectedKeyIndex = i"
-                                :disabled="!apiKeys[currentProvider][i]"
-                                class="h-8 rounded-lg flex items-center justify-center text-[10px] font-bold border transition-all relative overflow-hidden"
-                                :class="[
-                                    apiKeys[currentProvider][i]
-                                        ? selectedKeyIndex === i
-                                            ? 'bg-cozy-primary text-white border-cozy-primary'
-                                            : 'bg-white border-cozy-border text-cozy-text hover:border-cozy-primary'
-                                        : 'bg-gray-100 border-dashed text-gray-300 cursor-not-allowed',
-                                ]"
-                            >
-                                {{ i }}
-                            </button>
-                        </div>
-                    </div>
 
                     <div
-                        v-if="pdfFile && currentProvider !== 'gemini'"
-                        class="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-3 animate-in fade-in"
-                    >
-                        <div
-                            class="p-2 bg-blue-100 rounded-full text-blue-600 shadow-sm"
-                        >
-                            <Workflow class="w-4 h-4" />
-                        </div>
-                        <div>
-                            <p
-                                class="text-[10px] font-bold text-blue-700 uppercase tracking-wide"
-                            >
-                                AI Pipeline Active
-                            </p>
-                            <p class="text-[10px] text-blue-600 leading-tight">
-                                Gemini (Reader) <span class="mx-1">&rarr;</span>
-                                {{ providers[currentProvider].name }} (Thinker)
-                            </p>
-                        </div>
-                    </div>
-
-                    <div
-                        class="mt-6 pt-4 border-t border-dashed border-cozy-border"
+                        class="mt-6 pt-5 border-t border-dashed border-cozy-border"
                     >
                         <button
                             @click="openResetModal"
                             :disabled="isResetting"
-                            class="w-full py-2 flex items-center justify-center gap-2 text-red-500 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl text-xs font-bold transition-all opacity-70 hover:opacity-100"
+                            class="w-full py-3 flex items-center justify-center gap-2 text-red-500 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl text-sm font-bold transition-all opacity-80 hover:opacity-100"
                         >
-                            <AlertTriangle class="w-4 h-4" /> System Reset
+                            <AlertTriangle class="w-4 h-4" /> Emergency Reset
                         </button>
                     </div>
                 </div>
 
                 <div
-                    class="bg-cozy-card border border-cozy-border rounded-[24px] p-6 shadow-sm sticky top-24"
+                    class="bg-cozy-card border border-cozy-border rounded-[32px] p-8 shadow-sm sticky top-28"
                 >
                     <h3
-                        class="text-sm font-bold text-cozy-text flex items-center gap-2 mb-6"
+                        class="text-base font-bold text-cozy-text flex items-center gap-2.5 mb-6"
                     >
-                        <BookOpen class="w-4 h-4 text-cozy-accent" /> Content
-                        Studio
+                        <BookOpen class="w-5 h-5 text-cozy-accent" /> Content
+                        Creator Hub
                     </h3>
-                    <div class="space-y-4">
+
+                    <div class="space-y-6">
+                        <div
+                            class="p-1.5 bg-cozy-bg border border-cozy-border rounded-2xl flex gap-1"
+                        >
+                            <button
+                                @click="saveMode = 'new'"
+                                class="flex-1 py-3 text-xs font-bold rounded-xl transition-all"
+                                :class="
+                                    saveMode === 'new'
+                                        ? 'bg-white shadow-sm text-cozy-primary ring-1 ring-cozy-border'
+                                        : 'text-cozy-muted hover:text-cozy-text'
+                                "
+                            >
+                                + New Course
+                            </button>
+                            <button
+                                @click="saveMode = 'append'"
+                                class="flex-1 py-3 text-xs font-bold rounded-xl transition-all"
+                                :class="
+                                    saveMode === 'append'
+                                        ? 'bg-white shadow-sm text-cozy-primary ring-1 ring-cozy-border'
+                                        : 'text-cozy-muted hover:text-cozy-text'
+                                "
+                            >
+                                + Existing
+                            </button>
+                        </div>
+
                         <div>
                             <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 block ml-1"
-                                >Topic / Title</label
+                                class="text-xs font-bold text-cozy-muted uppercase mb-2 block ml-1 tracking-wider"
+                                >{{
+                                    saveMode === "new"
+                                        ? "Subject Name"
+                                        : "Select Target"
+                                }}</label
                             >
-                            <div class="flex gap-2">
+                            <div v-if="saveMode === 'new'" class="flex gap-2">
                                 <div class="flex-1 relative">
                                     <Layers
-                                        class="w-4 h-4 text-cozy-muted absolute left-3 top-3.5"
-                                    /><input
+                                        class="w-5 h-5 text-cozy-muted absolute left-4 top-3.5"
+                                    />
+                                    <input
                                         v-model="subjectTitle"
                                         type="text"
-                                        placeholder="Ex: Psikologi Kognitif"
-                                        class="w-full pl-9 pr-4 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all"
+                                        placeholder="Ex: Biologi Sel"
+                                        class="w-full pl-12 pr-4 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all"
                                     />
                                 </div>
                                 <button
@@ -909,7 +995,7 @@ const formatDate = (timestamp) => {
                                         isGeneratingMaterial || !subjectTitle
                                     "
                                     class="w-12 flex items-center justify-center bg-gradient-to-br from-cozy-accent to-yellow-500 text-white rounded-xl shadow-md hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
-                                    title="AI Buat Ringkasan Materi"
+                                    title="Auto-Summarize Title"
                                 >
                                     <Loader2
                                         v-if="isGeneratingMaterial"
@@ -917,60 +1003,109 @@ const formatDate = (timestamp) => {
                                     /><Wand2 v-else class="w-5 h-5" />
                                 </button>
                             </div>
+                            <div v-else class="relative">
+                                <Layers
+                                    class="w-5 h-5 text-cozy-muted absolute left-4 top-3.5 z-10"
+                                />
+                                <select
+                                    v-model="selectedCourseId"
+                                    class="w-full pl-12 pr-10 py-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none transition-all appearance-none cursor-pointer"
+                                >
+                                    <option value="" disabled>
+                                        -- Pilih Folder --
+                                    </option>
+                                    <option
+                                        v-for="course in existingCourses"
+                                        :key="course.id"
+                                        :value="course.id"
+                                    >
+                                        {{ course.title }}
+                                    </option>
+                                </select>
+                                <div
+                                    class="absolute right-4 top-3.5 pointer-events-none"
+                                >
+                                    <ArrowRight
+                                        class="w-5 h-5 text-cozy-muted rotate-90"
+                                    />
+                                </div>
+                            </div>
                         </div>
 
                         <div>
                             <label
-                                class="text-[10px] font-bold text-cozy-muted uppercase mb-1 block ml-1"
-                                >Generation Mode</label
+                                class="text-xs font-bold text-cozy-muted uppercase mb-2 block ml-1 tracking-wider"
+                                >AI Behavior</label
                             >
-                            <div
-                                class="grid grid-cols-2 gap-2 p-1 bg-cozy-bg rounded-xl border border-cozy-border"
-                            >
+                            <div class="grid grid-cols-2 gap-3">
                                 <button
                                     @click="generationMode = 'hard'"
-                                    class="flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all"
+                                    class="flex flex-col items-center justify-center p-3 rounded-xl border transition-all"
                                     :class="
                                         generationMode === 'hard'
-                                            ? 'bg-white shadow-sm text-cozy-text ring-1 ring-cozy-border'
-                                            : 'text-cozy-muted hover:text-cozy-text'
+                                            ? 'bg-white shadow-sm border-cozy-text text-cozy-text ring-1 ring-cozy-border'
+                                            : 'bg-cozy-bg border-cozy-border text-cozy-muted hover:border-cozy-text/50'
                                     "
                                 >
-                                    <Lock class="w-3 h-3" /> Strict Focus
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <Lock class="w-4 h-4" /><span
+                                            class="text-xs font-bold"
+                                            >Strict Mode</span
+                                        >
+                                    </div>
+                                    <p class="text-[10px] opacity-70">
+                                        100% dari Sumber
+                                    </p>
                                 </button>
                                 <button
                                     @click="generationMode = 'soft'"
-                                    class="flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all"
+                                    class="flex flex-col items-center justify-center p-3 rounded-xl border transition-all"
                                     :class="
                                         generationMode === 'soft'
-                                            ? 'bg-white shadow-sm text-cozy-primary ring-1 ring-cozy-border'
-                                            : 'text-cozy-muted hover:text-cozy-text'
+                                            ? 'bg-white shadow-sm border-cozy-primary text-cozy-primary ring-1 ring-cozy-primary'
+                                            : 'bg-cozy-bg border-cozy-border text-cozy-muted hover:border-cozy-primary/50'
                                     "
                                 >
-                                    <Globe class="w-3 h-3" /> Smart Creative
+                                    <div class="flex items-center gap-2 mb-1">
+                                        <Globe class="w-4 h-4" /><span
+                                            class="text-xs font-bold"
+                                            >Smart Mode</span
+                                        >
+                                    </div>
+                                    <p class="text-[10px] opacity-70">
+                                        Context Rich
+                                    </p>
                                 </button>
                             </div>
-                            <p
-                                class="text-[9px] text-cozy-muted mt-1.5 ml-1 leading-tight"
+                            <div
+                                class="mt-2 flex items-start gap-2 bg-blue-50 p-2 rounded-lg border border-blue-100"
                             >
-                                {{
-                                    generationMode === "hard"
-                                        ? "🔒 Focus: Jawaban 100% dari materi PDF. Tanpa opini luar."
-                                        : "✨ Smart: Menggunakan materi PDF + pengetahuan umum AI untuk penjelasan."
-                                }}
-                            </p>
+                                <Info
+                                    class="w-4 h-4 text-blue-500 shrink-0 mt-0.5"
+                                />
+                                <p
+                                    class="text-[10px] text-blue-700 leading-tight"
+                                >
+                                    <span class="font-bold">Strict:</span>
+                                    Anti-halusinasi, cocok untuk definisi
+                                    pasti.<br />
+                                    <span class="font-bold">Smart:</span>
+                                    Menambah contoh nyata agar mudah dipahami.
+                                </p>
+                            </div>
                         </div>
 
-                        <div class="space-y-2">
+                        <div class="space-y-3">
                             <div class="flex justify-between items-center px-1">
                                 <label
-                                    class="text-[10px] font-bold text-cozy-muted uppercase block"
-                                    >Source Material</label
+                                    class="text-xs font-bold text-cozy-muted uppercase block tracking-wider"
+                                    >Knowledge Source</label
                                 >
                                 <span
                                     v-if="pdfFile"
-                                    class="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in"
-                                    ><Check class="w-3 h-3" /> PDF Ready</span
+                                    class="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full flex items-center gap-1 animate-in fade-in"
+                                    ><Check class="w-3 h-3" /> Ready to
+                                    Cook</span
                                 >
                             </div>
 
@@ -986,63 +1121,97 @@ const formatDate = (timestamp) => {
                                     accept="application/pdf"
                                     @change="handleFileUpload"
                                     class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                    :disabled="isUploadingPdf"
                                 />
 
                                 <div
-                                    class="w-full p-4 border-2 border-dashed rounded-xl transition-all duration-300 flex flex-col items-center justify-center gap-2 text-center"
+                                    class="w-full p-6 border-2 border-dashed rounded-2xl transition-all duration-300 flex flex-col items-center justify-center gap-3 text-center min-h-[140px]"
                                     :class="[
                                         isDragging
-                                            ? 'border-cozy-primary bg-cozy-primary/10 scale-[1.02]'
+                                            ? 'border-cozy-primary bg-cozy-primary/10 scale-[1.01]'
                                             : 'border-cozy-border bg-cozy-bg',
                                         pdfFile
                                             ? 'bg-green-50/50 border-green-200'
-                                            : 'group-hover:border-cozy-primary/50',
+                                            : 'group-hover:border-cozy-primary/50 group-hover:bg-white',
                                     ]"
                                 >
                                     <div
-                                        v-if="!pdfFile"
-                                        class="text-cozy-muted group-hover:text-cozy-primary transition-colors flex flex-col items-center"
+                                        v-if="isUploadingPdf"
+                                        class="flex flex-col items-center animate-pulse"
                                     >
-                                        <UploadCloud
-                                            class="w-6 h-6 mb-1"
-                                            :class="{
-                                                'animate-bounce': isDragging,
-                                            }"
+                                        <Loader2
+                                            class="w-8 h-8 text-cozy-primary animate-spin mb-2"
                                         />
-                                        <span class="text-xs font-bold">{{
-                                            isDragging
-                                                ? "Drop PDF Here!"
-                                                : "Upload PDF"
-                                        }}</span>
-                                        <span class="text-[9px] opacity-70">{{
-                                            isDragging
-                                                ? "Release to upload..."
-                                                : "Click or drag file here"
-                                        }}</span>
+                                        <span
+                                            class="text-sm font-bold text-cozy-primary"
+                                            >Scanning Document...</span
+                                        >
                                     </div>
+
+                                    <div
+                                        v-else-if="pdfFile"
+                                        class="relative w-full z-20"
+                                    >
+                                        <div
+                                            class="flex items-center gap-4 bg-white p-4 rounded-xl border border-green-100 shadow-sm text-left"
+                                        >
+                                            <div
+                                                class="p-3 bg-green-100 text-green-600 rounded-xl"
+                                            >
+                                                <FileText class="w-6 h-6" />
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <p
+                                                    class="text-sm font-bold text-cozy-text truncate"
+                                                >
+                                                    {{ pdfFileName }}
+                                                </p>
+                                                <p
+                                                    class="text-xs text-green-600 font-medium"
+                                                >
+                                                    {{ pdfFileSize }}
+                                                </p>
+                                            </div>
+                                            <button
+                                                @click.prevent="removeFile"
+                                                class="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                            >
+                                                <X class="w-5 h-5" />
+                                            </button>
+                                        </div>
+                                    </div>
+
                                     <div
                                         v-else
-                                        class="text-green-700 flex flex-col items-center w-full overflow-hidden"
+                                        class="text-cozy-muted group-hover:text-cozy-primary transition-colors flex flex-col items-center"
                                     >
-                                        <FileText class="w-6 h-6 mb-1" />
-                                        <span
-                                            class="text-xs font-bold truncate max-w-[200px]"
-                                            >{{ pdfFileName }}</span
+                                        <div
+                                            class="p-3 bg-white rounded-full shadow-sm mb-2 group-hover:scale-110 transition-transform"
                                         >
-                                        <span
-                                            class="text-[9px] opacity-70 text-green-600"
-                                            >Click to change file</span
+                                            <UploadCloud
+                                                class="w-6 h-6"
+                                                :class="{
+                                                    'animate-bounce':
+                                                        isDragging,
+                                                }"
+                                            />
+                                        </div>
+                                        <span class="text-sm font-bold"
+                                            >Drop your knowledge base here</span
+                                        >
+                                        <span class="text-xs opacity-70 mt-1"
+                                            >PDF Files Only (Max 200MB)</span
                                         >
                                     </div>
                                 </div>
                             </div>
 
-                            <div class="relative flex py-1 items-center">
+                            <div class="relative flex py-2 items-center">
                                 <div
                                     class="flex-grow border-t border-cozy-border"
                                 ></div>
                                 <span
-                                    class="flex-shrink-0 mx-2 text-[9px] text-cozy-muted font-bold uppercase"
+                                    class="flex-shrink-0 mx-3 text-[10px] text-cozy-muted font-bold uppercase tracking-widest"
                                     >OR PASTE TEXT</span
                                 >
                                 <div
@@ -1052,47 +1221,47 @@ const formatDate = (timestamp) => {
 
                             <textarea
                                 v-model="rawMaterial"
-                                rows="4"
-                                placeholder="Or paste text material here..."
-                                class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-xs leading-relaxed text-cozy-text focus:border-cozy-primary outline-none resize-none transition-all"
+                                rows="3"
+                                placeholder="Paste manual text material here if you don't have a PDF..."
+                                class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-sm leading-relaxed text-cozy-text focus:border-cozy-primary outline-none resize-none transition-all placeholder:text-gray-400"
                             ></textarea>
                         </div>
 
                         <div
-                            class="bg-cozy-bg rounded-xl p-3 border border-cozy-border flex items-center gap-4"
+                            class="bg-cozy-bg rounded-xl p-4 border border-cozy-border flex items-center gap-4"
                         >
                             <span
-                                class="text-xs font-bold text-cozy-text whitespace-nowrap"
+                                class="text-sm font-bold text-cozy-text whitespace-nowrap w-20"
                                 >{{ questionCount }} Items</span
                             >
                             <input
                                 type="range"
                                 min="1"
-                                max="10"
+                                max="50"
+                                step="1"
                                 v-model="questionCount"
-                                class="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-cozy-primary"
+                                class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-cozy-primary"
                             />
                         </div>
 
                         <button
                             @click="generateQuestions"
                             :disabled="isLoading || (!rawMaterial && !pdfFile)"
-                            class="w-full py-4 rounded-xl bg-cozy-primary text-white font-bold shadow-lg shadow-cozy-primary/20 hover:shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 flex justify-center gap-2 relative overflow-hidden group"
+                            class="w-full py-4 rounded-xl bg-cozy-primary text-white font-bold text-base shadow-lg shadow-cozy-primary/30 hover:shadow-xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex justify-center gap-3 relative overflow-hidden group"
                         >
                             <div
                                 class="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300"
                             ></div>
                             <span
                                 v-if="isLoading"
-                                class="flex items-center gap-2"
+                                class="flex items-center gap-2 relative z-10 animate-pulse"
                                 ><Loader2 class="w-5 h-5 animate-spin" />
-                                {{ processingStage || "Processing..." }}</span
+                                {{ processingStage || "Cooking..." }}</span
                             >
                             <span
                                 v-else
                                 class="flex items-center gap-2 relative z-10"
-                                ><Sparkles class="w-5 h-5" /> Generate
-                                Magic</span
+                                ><Sparkles class="w-5 h-5" /> Craft Magic</span
                             >
                         </button>
                     </div>
@@ -1100,23 +1269,24 @@ const formatDate = (timestamp) => {
             </div>
 
             <div class="lg:col-span-8" ref="previewSection">
-                <div class="flex justify-between items-center mb-4 px-2">
+                <div class="flex justify-between items-center mb-6 px-2">
                     <h3
-                        class="text-sm font-bold text-cozy-muted uppercase tracking-widest flex items-center gap-2"
+                        class="text-base font-bold text-cozy-muted uppercase tracking-widest flex items-center gap-2"
                     >
-                        <Check class="w-4 h-4" /> Live Preview
+                        <Check class="w-5 h-5" /> Live Preview
                         <span
-                            class="bg-cozy-bg border border-cozy-border px-2 py-0.5 rounded-md text-cozy-text"
-                            >{{ generatedQuestions.length }}</span
+                            class="bg-cozy-bg border border-cozy-border px-3 py-0.5 rounded-lg text-cozy-text text-xs"
+                            >{{ generatedQuestions.length }} Cards</span
                         >
                     </h3>
                     <button
                         v-if="generatedQuestions.length"
                         @click="saveToDatabase"
                         :disabled="isSaving"
-                        class="text-xs font-bold text-cozy-primary hover:bg-cozy-primary/10 px-3 py-1.5 rounded-lg transition-all"
+                        class="text-sm font-bold text-cozy-primary bg-white border border-cozy-border hover:border-cozy-primary hover:bg-cozy-primary/5 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2"
                     >
-                        {{ isSaving ? "Saving..." : "Save All" }}
+                        <Save class="w-4 h-4" />
+                        {{ isSaving ? "Saving..." : "Save Everything" }}
                     </button>
                 </div>
 
@@ -1125,19 +1295,20 @@ const formatDate = (timestamp) => {
                     class="h-[600px] flex flex-col items-center justify-center text-center border-2 border-dashed border-cozy-border rounded-[32px] bg-cozy-bg/30"
                 >
                     <div
-                        class="w-20 h-20 bg-cozy-card rounded-full flex items-center justify-center mb-4 shadow-sm"
+                        class="w-24 h-24 bg-white rounded-full flex items-center justify-center mb-6 shadow-sm"
                     >
-                        <Sparkles class="w-8 h-8 text-cozy-muted" />
+                        <Sparkles class="w-10 h-10 text-cozy-muted" />
                     </div>
-                    <h4 class="font-bold text-cozy-text text-lg">
+                    <h4 class="font-bold text-cozy-text text-xl mb-2">
                         Workspace Empty
                     </h4>
-                    <p class="text-xs text-cozy-muted mt-1 max-w-xs">
-                        Upload a PDF or paste text, then hit Generate.
+                    <p class="text-sm text-cozy-muted max-w-xs leading-relaxed">
+                        Upload your material on the left panel, pick your mode,
+                        and hit the magic button.
                     </p>
                 </div>
 
-                <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4 pb-12">
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-6 pb-12">
                     <div
                         v-for="(card, index) in generatedQuestions"
                         :key="index"
@@ -1145,23 +1316,23 @@ const formatDate = (timestamp) => {
                     >
                         <div
                             v-if="editingIndex === index"
-                            class="bg-cozy-card border-2 border-cozy-primary/50 p-4 rounded-[24px] shadow-lg flex flex-col gap-3 animate-in zoom-in-95 h-full"
+                            class="bg-cozy-card border-2 border-cozy-primary/50 p-6 rounded-[24px] shadow-lg flex flex-col gap-4 animate-in zoom-in-95 h-full"
                         >
-                            <div class="flex justify-between items-center mb-1">
+                            <div class="flex justify-between items-center mb-2">
                                 <span
-                                    class="text-[10px] font-bold text-cozy-primary uppercase tracking-wider"
+                                    class="text-xs font-bold text-cozy-primary uppercase tracking-wider"
                                     >Editing Card #{{ index + 1 }}</span
                                 >
-                                <div class="flex gap-1">
+                                <div class="flex gap-2">
                                     <button
                                         @click="saveEdit(index)"
-                                        class="p-1.5 bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors"
+                                        class="p-2 bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors"
                                     >
                                         <Check class="w-4 h-4" />
                                     </button>
                                     <button
                                         @click="cancelEdit"
-                                        class="p-1.5 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
+                                        class="p-2 bg-red-100 text-red-600 rounded-full hover:bg-red-200 transition-colors"
                                     >
                                         <X class="w-4 h-4" />
                                     </button>
@@ -1170,42 +1341,36 @@ const formatDate = (timestamp) => {
                             <input
                                 v-model="tempEditData.tag"
                                 type="text"
-                                class="w-full p-2 bg-cozy-bg border border-cozy-border rounded-xl text-xs font-bold text-cozy-muted focus:border-cozy-primary outline-none"
+                                class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-xs font-bold text-cozy-muted focus:border-cozy-primary outline-none"
                                 placeholder="Tag..."
                             />
                             <input
                                 v-model="tempEditData.q"
                                 type="text"
-                                class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none"
-                                placeholder="Pertanyaan..."
+                                class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-sm font-bold text-cozy-text focus:border-cozy-primary outline-none"
+                                placeholder="Question..."
                             />
                             <textarea
                                 v-model="tempEditData.a"
-                                rows="4"
-                                class="w-full p-3 bg-cozy-bg border border-cozy-border rounded-xl text-sm text-cozy-text focus:border-cozy-primary outline-none resize-none"
-                                placeholder="Jawaban..."
+                                rows="5"
+                                class="w-full p-4 bg-cozy-bg border border-cozy-border rounded-xl text-sm text-cozy-text focus:border-cozy-primary outline-none resize-none leading-relaxed"
+                                placeholder="Answer..."
                             ></textarea>
-                            <input
-                                v-model="tempEditData.source"
-                                type="text"
-                                class="w-full p-2 bg-cozy-bg border border-cozy-border rounded-xl text-xs font-bold text-cozy-muted focus:border-cozy-primary outline-none"
-                                placeholder="Sumber (Opsional)..."
-                            />
                         </div>
 
                         <div v-else class="h-full relative">
                             <div
-                                class="absolute -top-2 -right-2 z-20 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                                class="absolute -top-3 -right-3 z-20 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
                             >
                                 <button
                                     @click="startEdit(index)"
-                                    class="p-2 bg-white text-cozy-primary border border-cozy-border rounded-full shadow-md hover:bg-cozy-primary hover:text-white transition-all scale-75 group-hover:scale-100"
+                                    class="p-2.5 bg-white text-cozy-primary border border-cozy-border rounded-full shadow-md hover:bg-cozy-primary hover:text-white transition-all scale-90 group-hover:scale-100"
                                 >
                                     <Pencil class="w-4 h-4" />
                                 </button>
                                 <button
                                     @click="removeDraft(index)"
-                                    class="p-2 bg-white text-red-400 border border-cozy-border rounded-full shadow-md hover:bg-red-500 hover:text-white transition-all scale-75 group-hover:scale-100"
+                                    class="p-2.5 bg-white text-red-400 border border-cozy-border rounded-full shadow-md hover:bg-red-500 hover:text-white transition-all scale-90 group-hover:scale-100"
                                 >
                                     <Trash2 class="w-4 h-4" />
                                 </button>
@@ -1213,7 +1378,7 @@ const formatDate = (timestamp) => {
                             <QuestionCard
                                 :item="card"
                                 :isRevealed="true"
-                                class="h-full"
+                                class="h-full shadow-sm hover:shadow-md transition-shadow"
                             />
                         </div>
                     </div>
@@ -1221,17 +1386,17 @@ const formatDate = (timestamp) => {
 
                 <div
                     v-if="generatedQuestions.length > 0"
-                    class="fixed bottom-28 right-6 lg:hidden z-40"
+                    class="fixed bottom-32 right-8 lg:hidden z-40"
                 >
                     <button
                         @click="saveToDatabase"
                         :disabled="isSaving"
-                        class="w-14 h-14 bg-cozy-primary text-white rounded-full shadow-xl flex items-center justify-center active:scale-90 transition-all"
+                        class="w-16 h-16 bg-cozy-primary text-white rounded-full shadow-2xl flex items-center justify-center active:scale-90 transition-all border-4 border-white"
                     >
                         <Loader2
                             v-if="isSaving"
-                            class="w-6 h-6 animate-spin"
-                        /><Save v-else class="w-6 h-6" />
+                            class="w-7 h-7 animate-spin"
+                        /><Save v-else class="w-7 h-7" />
                     </button>
                 </div>
             </div>
@@ -1247,5 +1412,8 @@ const formatDate = (timestamp) => {
     to {
         transform: rotate(360deg);
     }
+}
+.btn-header {
+    @apply flex items-center gap-2 px-4 py-2.5 bg-white border border-cozy-border text-cozy-text rounded-xl text-xs font-bold hover:bg-cozy-text hover:text-white transition-all shadow-sm;
 }
 </style>

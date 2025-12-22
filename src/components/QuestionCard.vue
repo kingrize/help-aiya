@@ -95,7 +95,7 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
 
 <template>
     <div
-        class="group relative rounded-[24px] p-6 cursor-pointer border transition-all duration-300 flex flex-col overflow-hidden bg-cozy-card shadow-sm"
+        class="group relative rounded-[24px] p-6 cursor-pointer border transition-all duration-300 flex flex-col overflow-hidden bg-cozy-card shadow-sm h-full"
         :class="[
             isRevealed
                 ? 'bg-white border-cozy-primary/40 shadow-lg ring-1 ring-cozy-primary/10'
@@ -103,10 +103,10 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
         ]"
         @click="toggleCard"
     >
-        <div class="flex justify-between items-start mb-3 relative z-10">
-            <div class="flex items-start gap-3 max-w-[80%]">
+        <div class="flex justify-between items-start mb-4 relative z-10">
+            <div class="flex items-center gap-3 max-w-[80%]">
                 <div
-                    class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center transition-colors duration-300 shadow-sm mt-0.5"
+                    class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center transition-colors duration-300 shadow-sm"
                     :class="
                         isRevealed
                             ? 'bg-cozy-primary text-white'
@@ -172,8 +172,7 @@ const parsedAnswer = computed(() => marked.parse(props.item.a));
         </div>
 
         <div
-            class="flex-1 flex flex-col justify-center transition-all duration-300"
-            :class="isRevealed ? 'mb-4' : 'mb-6 py-2'"
+            class="flex-1 flex flex-col justify-center mb-4 transition-all duration-300"
         >
             <h3
                 class="font-display font-bold text-cozy-text leading-snug transition-all duration-300"

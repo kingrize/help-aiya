@@ -11,7 +11,7 @@
                     class="text-cozy-primary inline-block animate-heartbeat text-sm"
                     >♥</span
                 >
-                Belajar yang Rajin Ya!
+                Belajar yang Rajin Ya~
             </p>
 
             <div

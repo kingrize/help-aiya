@@ -1,17 +1,18 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from "vue";
-import { collection, getDocs, query } from "firebase/firestore";
+import { collection, getDocs, query } from "firebase/firestore"; // Import yang benar
+import { useRouter } from "vue-router";
 import { db } from "../firebase.js";
 import HeaderSection from "../components/HeaderSection.vue";
 import FooterSection from "../components/FooterSection.vue";
-import QuestionCard from "../components/QuestionCard.vue";
+import FolderCard from "../components/FolderCard.vue"; // Pastikan component ini ada
 import { playPop } from "../utils/sound.js";
 import { Loader2, Bot, Search, X } from "lucide-vue-next";
 
+const router = useRouter();
+
 // --- STATE ---
-const questions = ref([]);
-const revealedCards = ref(new Set());
-const selectedTag = ref("Semua");
+const courses = ref([]);
 const searchQuery = ref("");
 const isLoading = ref(true);
 const isSearchOpen = ref(false);
@@ -21,16 +22,36 @@ const searchInputRef = ref(null);
 onMounted(async () => {
     try {
         isLoading.value = true;
+
+        // PERBAIKAN DI SINI:
+        // Gunakan 'collection' untuk mengambil daftar semua folder/materi
+        // JANGAN pakai 'doc' di sini karena kita mau list banyak, bukan satu.
         const q = query(collection(db, "courses"));
+
         const querySnapshot = await getDocs(q);
-        let allQuestions = [];
-        querySnapshot.forEach((doc) => {
-            const data = doc.data();
-            if (data.questionsList && Array.isArray(data.questionsList)) {
-                allQuestions = [...allQuestions, ...data.questionsList];
-            }
+
+        const loadedCourses = [];
+        querySnapshot.forEach((docItem) => {
+            const data = docItem.data();
+            loadedCourses.push({
+                id: docItem.id,
+                title: data.title || "Materi Tanpa Judul",
+                description: data.description || "Tidak ada deskripsi.",
+                questionCount: data.questionsList
+                    ? data.questionsList.length
+                    : 0,
+                createdAt: data.createdAt,
+            });
         });
-        questions.value = allQuestions;
+
+        // Sort manual by date (opsional, jika createdAt ada)
+        loadedCourses.sort((a, b) => {
+            const timeA = a.createdAt?.seconds || 0;
+            const timeB = b.createdAt?.seconds || 0;
+            return timeB - timeA; // Terbaru di atas
+        });
+
+        courses.value = loadedCourses;
     } catch (error) {
         console.error("Gagal mengambil data:", error);
     } finally {
@@ -38,21 +59,10 @@ onMounted(async () => {
     }
 });
 
-const toggleCard = (id) => {
-    const newSet = new Set(revealedCards.value);
-    if (newSet.has(id)) newSet.delete(id);
-    else {
-        newSet.clear();
-        newSet.add(id);
-    }
-    revealedCards.value = newSet;
-};
-
-const selectFilter = (tag) => {
-    if (selectedTag.value !== tag) playPop();
-    selectedTag.value = tag;
-    searchQuery.value = "";
-    isSearchOpen.value = false;
+const openCourse = (id) => {
+    playPop();
+    // Arahkan ke halaman detail materi
+    router.push(`/course/${id}`);
 };
 
 const openSearch = () => {
@@ -75,26 +85,16 @@ const clearSearch = (e) => {
     isSearchOpen.value = false;
 };
 
-const tags = computed(() => [
-    "Semua",
-    ...new Set(questions.value.map((q) => q.tag)),
-]);
+// Filter Folders
+const filteredCourses = computed(() => {
+    if (!searchQuery.value.trim()) return courses.value;
 
-const filteredQuestions = computed(() => {
-    let result = questions.value;
-    if (selectedTag.value !== "Semua") {
-        result = result.filter((q) => q.tag === selectedTag.value);
-    }
-    if (searchQuery.value.trim()) {
-        const lowerQ = searchQuery.value.toLowerCase();
-        result = result.filter(
-            (q) =>
-                q.q.toLowerCase().includes(lowerQ) ||
-                q.a.toLowerCase().includes(lowerQ) ||
-                q.tag.toLowerCase().includes(lowerQ),
-        );
-    }
-    return result;
+    const lowerQ = searchQuery.value.toLowerCase();
+    return courses.value.filter(
+        (c) =>
+            c.title.toLowerCase().includes(lowerQ) ||
+            c.description.toLowerCase().includes(lowerQ),
+    );
 });
 </script>
 
@@ -106,8 +106,8 @@ const filteredQuestions = computed(() => {
 
         <main class="max-w-6xl mx-auto px-6 md:px-12 relative z-10 pt-4">
             <div
-                v-if="!isLoading && questions.length > 0"
-                class="sticky top-4 z-30 mb-6 flex justify-center pointer-events-none"
+                v-if="!isLoading && courses.length > 0"
+                class="sticky top-4 z-30 mb-8 flex justify-center pointer-events-none"
             >
                 <div
                     class="pointer-events-auto relative transition-all duration-500 cubic-bezier(0.175, 0.885, 0.32, 1.275)"
@@ -137,7 +137,7 @@ const filteredQuestions = computed(() => {
                             ref="searchInputRef"
                             v-model="searchQuery"
                             type="text"
-                            placeholder="Cari materi..."
+                            placeholder="Cari materi pelajaran..."
                             class="flex-1 bg-transparent border-none outline-none text-sm font-bold text-cozy-text placeholder:text-cozy-muted/60 h-full min-w-0"
                             @blur="closeSearch"
                         />
@@ -149,24 +149,6 @@ const filteredQuestions = computed(() => {
                             <X class="w-4 h-4" />
                         </button>
                     </div>
-                </div>
-            </div>
-
-            <div v-if="!isLoading && questions.length > 0" class="mb-8 px-1">
-                <div class="flex flex-wrap justify-center gap-2">
-                    <button
-                        v-for="tag in tags"
-                        :key="tag"
-                        @click="selectFilter(tag)"
-                        class="px-4 py-2 rounded-xl text-xs font-bold transition-all duration-300 border active:scale-95 shadow-sm h-auto break-words leading-tight text-center max-w-[200px]"
-                        :class="
-                            selectedTag === tag
-                                ? 'bg-cozy-text text-cozy-bg border-cozy-text shadow-md transform -translate-y-0.5'
-                                : 'bg-cozy-card/50 border-cozy-border text-cozy-muted hover:bg-cozy-card hover:text-cozy-text hover:border-cozy-primary/50'
-                        "
-                    >
-                        {{ tag }}
-                    </button>
                 </div>
             </div>
 
@@ -186,21 +168,20 @@ const filteredQuestions = computed(() => {
                 <p
                     class="text-xs text-cozy-muted font-bold tracking-widest animate-pulse"
                 >
-                    MENYIAPKAN MATERI...
+                    MEMUAT MATERI...
                 </p>
             </div>
 
             <div
-                v-else-if="filteredQuestions.length > 0"
-                class="grid grid-cols-1 md:grid-cols-2 gap-5 pb-12 items-start"
+                v-else-if="filteredCourses.length > 0"
+                class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5 pb-12 items-stretch"
             >
                 <transition-group name="staggered-fade">
-                    <QuestionCard
-                        v-for="q in filteredQuestions"
-                        :key="q.id"
-                        :item="q"
-                        :isRevealed="revealedCards.has(q.id)"
-                        @toggle="toggleCard"
+                    <FolderCard
+                        v-for="course in filteredCourses"
+                        :key="course.id"
+                        :course="course"
+                        @open="openCourse"
                     />
                 </transition-group>
             </div>
@@ -219,7 +200,11 @@ const filteredQuestions = computed(() => {
                     </pre>
                 </div>
                 <h3 class="font-display font-bold text-lg text-cozy-text mb-2">
-                    {{ searchQuery ? "Tidak ditemukan." : "Belum ada materi." }}
+                    {{
+                        searchQuery
+                            ? "Materi tidak ditemukan."
+                            : "Belum ada materi."
+                    }}
                 </h3>
                 <p
                     class="text-xs text-cozy-muted max-w-[250px] mx-auto leading-relaxed"
@@ -227,14 +212,14 @@ const filteredQuestions = computed(() => {
                     {{
                         searchQuery
                             ? `Coba kata kunci lain selain "${searchQuery}".`
-                            : "Kucing penjaga sedang menunggu Admin memasukkan soal baru."
+                            : "Kucing penjaga sedang menunggu Admin mengupload materi baru."
                     }}
                 </p>
             </div>
         </main>
 
         <div
-            v-if="!isLoading && questions.length > 0"
+            v-if="!isLoading && courses.length > 0"
             class="fixed bottom-24 left-6 z-40 group"
         >
             <router-link to="/quiz" @click="playPop" class="block">

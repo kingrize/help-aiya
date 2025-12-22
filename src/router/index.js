@@ -1,10 +1,12 @@
-// File: src/router/index.js
 import { createRouter, createWebHistory } from "vue-router";
-import { getAuth, onAuthStateChanged } from "firebase/auth";
 import HomeView from "../views/HomeView.vue";
+import LoginView from "../views/LoginView.vue";
+import AdminView from "../views/AdminView.vue";
+import QuizView from "../views/QuizView.vue";
+import CourseView from "../views/CourseView.vue"; // Import Baru
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: "/",
@@ -14,24 +16,38 @@ const router = createRouter({
     {
       path: "/login",
       name: "login",
-      component: () => import("../views/LoginView.vue"),
+      component: LoginView,
     },
     {
       path: "/admin",
       name: "admin",
-      component: () => import("../views/AdminView.vue"),
+      component: AdminView,
       meta: { requiresAuth: true },
     },
-    // RUTE BARU: QUIZ MODE
     {
       path: "/quiz",
       name: "quiz",
-      component: () => import("../views/QuizView.vue"),
+      component: QuizView,
+    },
+    {
+      // Rute dinamis untuk membuka folder materi tertentu
+      path: "/course/:id",
+      name: "course-detail",
+      component: CourseView,
     },
   ],
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) {
+      return savedPosition;
+    } else {
+      return { top: 0 };
+    }
+  },
 });
 
-// ... (Sisa kode Logic Satpam biarkan tetap sama) ...
+// Navigation Guard (Cek Login untuk Admin)
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+
 const getCurrentUser = () => {
   return new Promise((resolve, reject) => {
     const removeListener = onAuthStateChanged(
